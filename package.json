@@ -1,0 +1,17 @@
+{
+  "name": "durak-imperia-release-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "release:check": "node scripts/release-check.mjs",
+    "security:audit": "node scripts/audit-public-secrets.mjs",
+    "deploy:vps": "node scripts/deploy-vps.mjs",
+    "android:tools": "powershell -ExecutionPolicy Bypass -File scripts/setup-android-release-tools.ps1",
+    "android:test-apk": "powershell -ExecutionPolicy Bypass -File scripts/build-android-test-apk.ps1",
+    "android:build": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1",
+    "android:build:store": "powershell -ExecutionPolicy Bypass -File scripts/build-android-release.ps1 -StrictStoreRelease"
+  },
+  "devDependencies": {
+    "ssh2": "^1.17.0"
+  }
+}

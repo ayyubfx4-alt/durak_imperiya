@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0a0f;
+  --panel: #13131a;
+  --panel-2: #181820;
+  --sidebar: #0d0d14;
+  --border: #1e1e2e;
+  --muted: #9494a3;
+  --gold: #f5a623;
+  --green: #22c55e;
+  --red: #ef4444;
+  --purple: #a855f7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: #f7f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#root {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+button, input, select, textarea { font: inherit; }
+
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .5; }
+
+input, select, textarea {
+  color: #f7f7fb;
+  background: #090910;
+  border: 1px solid #26263a;
+  border-radius: 8px;
+  outline: none;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(245, 166, 35, .13);
+}
+
+select option { background: #111118; color: #f7f7fb; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0b0b12; }
+::-webkit-scrollbar-thumb { background: #343448; border-radius: 999px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  border-radius: 8px;
+  border: 1px solid #2a2a3d;
+  padding: 8px 12px;
+  color: #f7f7fb;
+  background: #191923;
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
+}
+
+.btn:hover { background: #20202d; border-color: #3a3a52; }
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--gold); border-color: #ffc151; color: #111; font-weight: 800; }
+.btn-primary:hover { background: #ffc151; border-color: #ffd17a; }
+.btn-danger { border-color: rgba(239,68,68,.45); color: #fecaca; background: rgba(239,68,68,.1); }
+.btn-danger:hover { background: rgba(239,68,68,.18); }
+.btn-green { border-color: rgba(34,197,94,.45); color: #bbf7d0; background: rgba(34,197,94,.1); }
+.btn-green:hover { background: rgba(34,197,94,.18); }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #c9a969;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #161620 25%, #20202d 37%, #161620 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.25s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "durak-online-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Durak Online — HTML5 + Phaser 3 PWA game client",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "lint": "echo 'no lint'"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

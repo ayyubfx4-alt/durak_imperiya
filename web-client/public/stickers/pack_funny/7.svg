@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff9f43"/><stop offset="1" stop-color="#4b2507"/></linearGradient>
+    <radialGradient id="shine" cx="28%" cy="18%" r="75%"><stop stop-color="#ffffffaa"/><stop offset=".34" stop-color="#ffffff22"/><stop offset="1" stop-color="#ffffff00"/></radialGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="12" stdDeviation="9" flood-color="#000" flood-opacity=".42"/></filter>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="url(#bg)"/>
+  <rect width="256" height="256" rx="48" fill="url(#shine)"/>
+  <path d="M35 58 C78 22 176 24 221 72" fill="none" stroke="#fff8" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="205" cy="53" r="15" fill="#fff7"/>
+  <g filter="url(#shadow)">
+    <rect x="35" y="48" width="186" height="150" rx="34" fill="#ffffff2e" stroke="#fff7" stroke-width="3"/>
+    <circle cx="128" cy="122" r="56" fill="#11182755" stroke="#fff7" stroke-width="3"/>
+    <text x="128" y="128" text-anchor="middle" dominant-baseline="middle" font-family="Arial, Segoe UI Emoji, sans-serif" font-size="62" font-weight="900" fill="#fff7d6" stroke="#2b1608" stroke-width="2">HEH</text>
+  </g>
+  <text x="128" y="224" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="900" fill="#fffbe8" stroke="#0008" stroke-width="1">FUN 7</text>
+</svg>

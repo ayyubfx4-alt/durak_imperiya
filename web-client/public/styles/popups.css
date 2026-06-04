@@ -1,0 +1,173 @@
+/* Achievement / event popup stack — bottom-right floating cards with a
+   celebratory glow and slide-in animation. Matches the «Night Arena»
+   glassmorphism dark theme used everywhere else.
+
+   Mobile: bottom-center, full-width stack. Desktop: bottom-right column. */
+
+#achievement-popups,
+.popup-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 12px;
+  pointer-events: none;
+  max-width: 360px;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+@media (max-width: 600px) {
+  #achievement-popups,
+  .popup-stack {
+    left: 12px;
+    right: 12px;
+    max-width: none;
+  }
+}
+
+.popup-card {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: 56px 1fr 28px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 14px 12px;
+  border-radius: 16px;
+  background: rgba(22, 25, 41, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(245, 200, 66, 0.08) inset;
+  color: #f5f5f7;
+  font-family: 'Inter', system-ui, sans-serif;
+  transform: translateX(120%) scale(0.96);
+  opacity: 0;
+  transition:
+    transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.3s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.popup-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg,
+    rgba(245, 200, 66, 0.18),
+    rgba(245, 200, 66, 0) 60%);
+  pointer-events: none;
+}
+
+.popup-card.achievement::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #f5c842, #ff8a00, #f5c842);
+  background-size: 200% 100%;
+  animation: shimmer 2.2s linear infinite;
+}
+
+@keyframes shimmer {
+  to { background-position: -200% 0; }
+}
+
+.popup-card.event::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #00e0ff;
+  box-shadow: 0 0 8px #00e0ff;
+}
+
+.popup-card.show {
+  transform: translateX(0) scale(1);
+  opacity: 1;
+}
+
+.popup-card.out {
+  transform: translateX(120%) scale(0.96);
+  opacity: 0;
+}
+
+.popup-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f5c842, #d99700);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  box-shadow:
+    0 6px 20px rgba(245, 200, 66, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.popup-card.event .popup-icon {
+  background: linear-gradient(135deg, #00e0ff, #0085ff);
+  box-shadow:
+    0 6px 20px rgba(0, 224, 255, 0.4),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.popup-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.popup-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #f5c842;
+}
+
+.popup-card.event .popup-title {
+  color: #00e0ff;
+}
+
+.popup-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.popup-target {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.popup-close {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  border: none;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.popup-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}

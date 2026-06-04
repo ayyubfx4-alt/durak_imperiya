@@ -1,0 +1,53 @@
+{
+  "appId": "com.durakimperia.game",
+  "appName": "Durak Imperia",
+  "webDir": "../web-client/public",
+  "bundledWebRuntime": false,
+  "server": {
+    "cleartext": false,
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": [
+      "*.durakimperia.com",
+      "accounts.google.com",
+      "*.googleapis.com"
+    ]
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": "release.keystore",
+      "keystoreAlias": "durak",
+      "releaseType": "AAB"
+    },
+    "minWebViewVersion": 80,
+    "backgroundColor": "#0d0f1a"
+  },
+  "ios": {
+    "contentInset": "always",
+    "scrollEnabled": true,
+    "limitsNavigationsToAppBoundDomains": true,
+    "backgroundColor": "#0d0f1a"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "launchAutoHide": true,
+      "backgroundColor": "#0d0f1a",
+      "androidSplashResourceName": "splash",
+      "iosSplash": "Splash",
+      "showSpinner": false
+    },
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    },
+    "AdMob": {
+      "appId_android": "",
+      "appId_ios": "",
+      "testingDevices": [],
+      "initializeForTesting": false
+    }
+  }
+}
+
+
+

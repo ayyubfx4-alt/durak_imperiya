@@ -1,0 +1,6 @@
+# Copy this file to release-signing.properties and fill real keystore values.
+# release-signing.properties and *.keystore are ignored by git.
+storeFile=release.keystore
+storePassword=CHANGE_ME
+keyAlias=durak
+keyPassword=CHANGE_ME

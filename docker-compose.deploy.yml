@@ -1,0 +1,135 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-durak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-durak}
+      POSTGRES_DB: ${POSTGRES_DB:-durak}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-durak} -d ${POSTGRES_DB:-durak}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "100"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-durak}:${POSTGRES_PASSWORD:-durak}@postgres:5432/${POSTGRES_DB:-durak}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be set to the HTTPS production origin}
+      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-admin@durak.local}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-2202}
+      ADMIN_PIN: ${ADMIN_PIN:-2202}
+      INSTANCE_ID: ${INSTANCE_ID:-durak-be-1}
+      INSTANCE_PREFIX: ${INSTANCE_PREFIX:-durak-be}
+      INSTANCE_COUNT: ${INSTANCE_COUNT:-1}
+      PRESENCE_TTL_S: ${PRESENCE_TTL_S:-60}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      PRIVACY_POLICY_URL: ${PRIVACY_POLICY_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_GAME_URL: ${TELEGRAM_GAME_URL:-}
+      TELEGRAM_ADMIN_URL: ${TELEGRAM_ADMIN_URL:-}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-8324791195}
+      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
+      TELEGRAM_HERO_IMAGE_URL: ${TELEGRAM_HERO_IMAGE_URL:-}
+      TELEGRAM_PLAY_MARKET_URL: ${TELEGRAM_PLAY_MARKET_URL:-}
+      TELEGRAM_STARS_ENABLED: ${TELEGRAM_STARS_ENABLED:-1}
+      TELEGRAM_BOT_POLLING_ENABLED: ${TELEGRAM_BOT_POLLING_ENABLED:-1}
+      TELEGRAM_BOT_INSTANCE_ID: ${TELEGRAM_BOT_INSTANCE_ID:-durak-be-1}
+      TELEGRAM_DROP_PENDING_UPDATES: ${TELEGRAM_DROP_PENDING_UPDATES:-0}
+      RELEASE_PLATFORMS: ${RELEASE_PLATFORMS:-android}
+      GOOGLE_PLAY_PACKAGE_NAME: ${GOOGLE_PLAY_PACKAGE_NAME:-com.durakimperia.game}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      APPLE_SHARED_SECRET: ${APPLE_SHARED_SECRET:-}
+      ADMOB_ANDROID_APP_ID: ${ADMOB_ANDROID_APP_ID:-}
+      ADMOB_IOS_APP_ID: ${ADMOB_IOS_APP_ID:-}
+      ADMOB_REWARDED_ANDROID_ID: ${ADMOB_REWARDED_ANDROID_ID:-}
+      ADMOB_REWARDED_IOS_ID: ${ADMOB_REWARDED_IOS_ID:-}
+      ADMOB_HALAL_CATEGORIES_BLOCKED: ${ADMOB_HALAL_CATEGORIES_BLOCKED:-0}
+      PREMIUM_MONTHLY_USD: ${PREMIUM_MONTHLY_USD:-}
+      PREMIUM_QUARTERLY_USD: ${PREMIUM_QUARTERLY_USD:-}
+      PREMIUM_YEARLY_USD: ${PREMIUM_YEARLY_USD:-}
+      PREMIUM_PRICES_APPROVED: ${PREMIUM_PRICES_APPROVED:-0}
+      GDEVELOP_SILVER_ACTIVE: ${GDEVELOP_SILVER_ACTIVE:-0}
+      USE_NODE_BACKEND_ONLY: ${USE_NODE_BACKEND_ONLY:-1}
+      ANDROID_RELEASE_KEYSTORE_READY: ${ANDROID_RELEASE_KEYSTORE_READY:-0}
+      ANDROID_TARGET_SDK: ${ANDROID_TARGET_SDK:-35}
+      GOOGLE_PLAY_BILLING_MAJOR: ${GOOGLE_PLAY_BILLING_MAJOR:-8}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
+      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
+      FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-}
+      FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+      FIREBASE_APP_ID: ${FIREBASE_APP_ID:-}
+    ports:
+      - "14000:4000"
+    volumes:
+      - admin_uploads:/app/uploads
+
+  web-client:
+    build:
+      context: ./web-client
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "18081:80"
+
+  admin-panel:
+    build:
+      context: ./admin-panel
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "18082:80"
+
+  support-panel:
+    build:
+      context: ./support-panel
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "18083:80"
+
+volumes:
+  pgdata:
+  redisdata:
+  admin_uploads:

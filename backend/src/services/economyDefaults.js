@@ -1,0 +1,2 @@
+export const STARTING_PLAYER_COINS = 6000;
+export const STARTING_PLAYER_GOLD_COINS = 0;

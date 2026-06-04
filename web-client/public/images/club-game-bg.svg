@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 1365" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="room" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a0f0a"/>
+      <stop offset=".32" stop-color="#392114"/>
+      <stop offset=".62" stop-color="#15100c"/>
+      <stop offset="1" stop-color="#080402"/>
+    </linearGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1d1009"/>
+      <stop offset=".25" stop-color="#4a2c1a"/>
+      <stop offset=".5" stop-color="#28170f"/>
+      <stop offset=".75" stop-color="#4f2d1a"/>
+      <stop offset="1" stop-color="#160c07"/>
+    </linearGradient>
+    <radialGradient id="lampGlow" cx=".5" cy=".18" r=".46">
+      <stop offset="0" stop-color="#ffd884" stop-opacity=".72"/>
+      <stop offset=".32" stop-color="#f2aa4d" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="felt" cx=".5" cy=".52" r=".58">
+      <stop offset="0" stop-color="#387842"/>
+      <stop offset=".6" stop-color="#1f5b34"/>
+      <stop offset="1" stop-color="#0d331f"/>
+    </radialGradient>
+    <linearGradient id="rail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8a5a34"/>
+      <stop offset=".45" stop-color="#3b1e10"/>
+      <stop offset="1" stop-color="#130805"/>
+    </linearGradient>
+    <pattern id="panelLines" width="86" height="180" patternUnits="userSpaceOnUse">
+      <rect width="86" height="180" fill="none"/>
+      <rect x="6" y="12" width="74" height="154" rx="4" fill="none" stroke="#8d6240" stroke-opacity=".28" stroke-width="4"/>
+      <rect x="14" y="24" width="58" height="132" rx="3" fill="none" stroke="#150a05" stroke-opacity=".42" stroke-width="3"/>
+    </pattern>
+    <filter id="soft" x="-15%" y="-15%" width="130%" height="130%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+
+  <rect width="768" height="1365" fill="url(#room)"/>
+  <rect width="768" height="460" fill="url(#wood)"/>
+  <rect width="768" height="460" fill="url(#panelLines)" opacity=".9"/>
+  <rect y="458" width="768" height="907" fill="#090604"/>
+  <rect y="452" width="768" height="12" fill="#b9864b" opacity=".42"/>
+  <rect y="0" width="768" height="1365" fill="url(#lampGlow)"/>
+
+  <path d="M0 0h768v55c-165 5-290 8-384 8S165 60 0 55z" fill="#5d3a22" opacity=".42"/>
+  <path d="M65 215h135v120H65z" fill="#130c08" opacity=".72"/>
+  <path d="M81 231h103v90H81z" fill="#071321" opacity=".86"/>
+  <path d="M132 231v90M81 276h103" stroke="#7aa0c1" stroke-opacity=".34" stroke-width="4"/>
+  <path d="M586 142h116v160H586z" fill="#120c09" opacity=".78"/>
+  <path d="M599 158h90v126h-90z" fill="#071321" opacity=".88"/>
+  <path d="M644 158v126M599 221h90" stroke="#7aa0c1" stroke-opacity=".36" stroke-width="4"/>
+
+  <g opacity=".86">
+    <path d="M339 0v154M384 0v165M429 0v154" stroke="#2d170c" stroke-width="5"/>
+    <path d="M321 135c40-26 88-26 128 0v42H321z" fill="#2b170d" opacity=".72"/>
+    <ellipse cx="384" cy="170" rx="88" ry="33" fill="#f2c06a" opacity=".13"/>
+    <path d="M351 143c-16 44-9 78 13 91 18-22 19-58-13-91z" fill="#ffc66f"/>
+    <path d="M384 147c-19 47-14 89 0 105 17-16 22-58 0-105z" fill="#ffe5a2"/>
+    <path d="M417 143c-32 33-31 69-13 91 22-13 29-47 13-91z" fill="#ffc66f"/>
+    <g filter="url(#soft)" opacity=".75">
+      <ellipse cx="351" cy="205" rx="28" ry="65" fill="#ffbd55"/>
+      <ellipse cx="384" cy="212" rx="32" ry="78" fill="#ffd16f"/>
+      <ellipse cx="417" cy="205" rx="28" ry="65" fill="#ffbd55"/>
+    </g>
+  </g>
+  <g opacity=".55">
+    <path d="M625 0v182M679 0v169" stroke="#2d170c" stroke-width="4"/>
+    <ellipse cx="652" cy="177" rx="55" ry="22" fill="#f2c06a" opacity=".16"/>
+    <path d="M646 166c-15 28-13 55 0 70 16-15 18-42 0-70z" fill="#ffd68c"/>
+  </g>
+
+  <g opacity=".82">
+    <rect x="250" y="318" width="105" height="78" rx="28" fill="#5b321f"/>
+    <rect x="295" y="292" width="178" height="104" rx="38" fill="#6b3d25"/>
+    <rect x="414" y="318" width="105" height="78" rx="28" fill="#5b321f"/>
+    <rect x="312" y="310" width="144" height="74" rx="20" fill="#2b160d" opacity=".34"/>
+  </g>
+
+  <ellipse cx="120" cy="508" rx="186" ry="70" fill="#0f0905" opacity=".65"/>
+  <ellipse cx="120" cy="494" rx="166" ry="48" fill="#2f1a0e"/>
+  <ellipse cx="120" cy="486" rx="140" ry="35" fill="#245f36"/>
+  <ellipse cx="660" cy="460" rx="170" ry="58" fill="#0f0905" opacity=".6"/>
+  <ellipse cx="660" cy="448" rx="145" ry="41" fill="#2f1a0e"/>
+  <ellipse cx="660" cy="440" rx="120" ry="29" fill="#245f36"/>
+
+  <g>
+    <ellipse cx="384" cy="1032" rx="474" ry="294" fill="#090503" opacity=".78"/>
+    <ellipse cx="384" cy="1000" rx="452" ry="276" fill="url(#rail)"/>
+    <ellipse cx="384" cy="964" rx="396" ry="222" fill="#140905" opacity=".75"/>
+    <ellipse cx="384" cy="932" rx="366" ry="200" fill="url(#felt)"/>
+    <ellipse cx="384" cy="932" rx="333" ry="172" fill="none" stroke="#2b7a45" stroke-opacity=".35" stroke-width="2"/>
+    <path d="M90 860c151-42 438-42 588 0" fill="none" stroke="#d8b56a" stroke-opacity=".15" stroke-width="3"/>
+    <path d="M108 895c139-35 414-35 552 0" fill="none" stroke="#fff" stroke-opacity=".05" stroke-width="2"/>
+  </g>
+
+  <g opacity=".8">
+    <rect x="55" y="795" width="70" height="160" rx="14" fill="#4f2c18" transform="rotate(-8 90 875)"/>
+    <rect x="69" y="812" width="42" height="125" rx="8" fill="#1f1009" transform="rotate(-8 90 875)"/>
+    <path d="M72 830h38M69 858h44M66 886h48M63 914h52" stroke="#a67545" stroke-opacity=".55" stroke-width="5"/>
+    <rect x="643" y="795" width="70" height="160" rx="14" fill="#4f2c18" transform="rotate(8 678 875)"/>
+    <rect x="657" y="812" width="42" height="125" rx="8" fill="#1f1009" transform="rotate(8 678 875)"/>
+    <path d="M660 830h38M657 858h44M654 886h48M651 914h52" stroke="#a67545" stroke-opacity=".55" stroke-width="5"/>
+  </g>
+
+  <rect width="768" height="1365" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="20"/>
+  <rect width="768" height="1365" fill="url(#room)" opacity=".08"/>
+  <radialGradient id="vignette" cx=".5" cy=".54" r=".67">
+    <stop offset=".62" stop-color="#000" stop-opacity="0"/>
+    <stop offset="1" stop-color="#000" stop-opacity=".72"/>
+  </radialGradient>
+  <rect width="768" height="1365" fill="url(#vignette)"/>
+</svg>

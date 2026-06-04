@@ -1,0 +1,58 @@
+// Static dev server for the web client. In production we use nginx (see Dockerfile).
+import express from 'express';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+app.use((req, res, next) => {
+  if (req.path.startsWith('/src/') || req.path.endsWith('.css') || req.path.endsWith('.js')) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  }
+  next();
+});
+
+// Firebase env inject: index.html so'rovida __FIREBASE_* env varlar script tagi sifatida
+// kiritiladi. Nginx production da sub_filter bilan bir xil ishlaydi.
+function buildFirebaseEnvScript() {
+  const vars = {
+    __FIREBASE_API_KEY__:            process.env.FIREBASE_API_KEY            || '',
+    __FIREBASE_AUTH_DOMAIN__:        process.env.FIREBASE_AUTH_DOMAIN        || '',
+    __FIREBASE_PROJECT_ID__:         process.env.FIREBASE_PROJECT_ID         || '',
+    __FIREBASE_STORAGE_BUCKET__:     process.env.FIREBASE_STORAGE_BUCKET     || '',
+    __FIREBASE_MESSAGING_SENDER_ID__:process.env.FIREBASE_MESSAGING_SENDER_ID|| '',
+    __FIREBASE_APP_ID__:             process.env.FIREBASE_APP_ID             || '',
+    __ADMOB_REWARDED_ID__:           process.env.ADMOB_REWARDED_ANDROID_ID   || '',
+    __APP_ENV__:                     process.env.NODE_ENV                    || 'development',
+  };
+  const assignments = Object.entries(vars)
+    .map(([k, v]) => `window.${k}=${JSON.stringify(v)};`)
+    .join('');
+  return `<script>${assignments}</script>`;
+}
+
+const indexPath = path.join(__dirname, 'public', 'index.html');
+app.get('/', serveIndex);
+app.get('/index.html', serveIndex);
+
+function serveIndex(_req, res) {
+  try {
+    let html = fs.readFileSync(indexPath, 'utf8');
+    html = html.replace('</head>', `${buildFirebaseEnvScript()}</head>`);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(html);
+  } catch (e) {
+    res.status(500).send('index.html topilmadi');
+  }
+}
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', serveIndex);
+
+app.listen(PORT, () => {
+  console.log(`web-client dev server on :${PORT}`);
+});

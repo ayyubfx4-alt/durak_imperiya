@@ -1,0 +1,22 @@
+services:
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  backend:
+    ports: !reset
+      - "14000:4000"
+
+  web-client:
+    ports: !reset
+      - "18080:80"
+
+  admin-panel:
+    ports: !reset
+      - "18081:80"
+
+  support-panel:
+    ports: !reset
+      - "18082:80"

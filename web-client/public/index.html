@@ -1,0 +1,128 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d0f1a" />
+  <meta name="description" content="Durak Imperia вЂ” real-time multiplayer card game" />
+  <link rel="icon" href="/icons/icon-192.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+
+  <!-- Google Fonts: Inter + Orbitron -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/styles.css?v=147-live-ui-151-mobile-polish-152-premium-classic-skin-157-baraban-professional-rewards-158-card-size-telegram-admin-159-emoji-mobile-logo-160-curated-card-skins-161-mobile-card-size-162-game-smooth" />
+  <link rel="stylesheet" href="/styles/popups.css" />
+  <link rel="stylesheet" href="/styles/inventory.css?v=125-card-collection-art" />
+  <link rel="stylesheet" href="/styles/premium.css" />
+  <title>Durak Imperia</title>
+  <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script src="/native-config.js?v=136-support-api-base"></script>
+  <script>
+    (function () {
+      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      var configured = window.__DURAK_API_BASE__ || window.__API_BASE__ || '';
+      if (isNative && configured) window.__API_BASE__ = configured.replace(/\/+$/, '');
+    })();
+  </script>
+
+  <!-- Socket.IO -->
+  <script>
+    (function () {
+      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      var localBackend = window.__API_BASE__ || ((location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+        ? 'http://localhost:4000'
+        : '');
+      document.write('<script src="' + localBackend + '/socket.io/socket.io.js"><\\/script>');
+    })();
+  </script>
+  <script>
+    window.io = window.io || function () {
+      return {
+        connected: false,
+        on: function () { return this; },
+        once: function () { return this; },
+        off: function () { return this; },
+        emit: function () { return this; },
+        close: function () {},
+        disconnect: function () {},
+      };
+    };
+  </script>
+
+  <!-- Firebase Compat SDK (Auth only) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script>
+    // Old service-worker/browser caches were keeping stale JS on phones.
+    // Clear them without rewriting the current public URL.
+    (async () => {
+      const key = 'durak-v162-game-smooth-cache-reset';
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1');
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+          }
+          if ('caches' in window) {
+            const names = await caches.keys();
+            await Promise.all(names.map((name) => caches.delete(name)));
+          }
+        } catch (_) {}
+      }
+    })();
+
+    // Firebase config вЂ” replace with your project's config from Firebase Console
+    // Production uses the nginx same-origin proxy, so even an older cached
+    // api.js build must call /api on this web origin instead of port 14000.
+    if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      window.__API_BASE__ = location.origin;
+    }
+
+    window.__firebaseInitPromise = (async () => {
+      const injectedConfig = {
+        apiKey:            window.__FIREBASE_API_KEY__            || "",
+        authDomain:        window.__FIREBASE_AUTH_DOMAIN__        || "",
+        projectId:         window.__FIREBASE_PROJECT_ID__         || "",
+        storageBucket:     window.__FIREBASE_STORAGE_BUCKET__     || "",
+        messagingSenderId: window.__FIREBASE_MESSAGING_SENDER_ID__|| "",
+        appId:             window.__FIREBASE_APP_ID__             || "",
+        measurementId:     window.__FIREBASE_MEASUREMENT_ID__     || "",
+      };
+      let firebaseConfig = injectedConfig;
+      if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "REPLACE_ME" || !firebaseConfig.appId || !firebaseConfig.messagingSenderId) {
+        try {
+          const res = await fetch('/api/auth/firebase-config', { cache: 'no-store' });
+          if (res.ok) firebaseConfig = await res.json();
+        } catch (_) {}
+      }
+      if (firebaseConfig.configured && firebaseConfig.apiKey && firebaseConfig.apiKey !== "REPLACE_ME" && firebaseConfig.appId && firebaseConfig.messagingSenderId) {
+        try {
+          if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(firebaseConfig);
+          window.__GOOGLE_SIGN_IN_DISABLED__ = false;
+        } catch (_) {
+          window.__GOOGLE_SIGN_IN_DISABLED__ = true;
+        }
+      } else {
+        window.__GOOGLE_SIGN_IN_DISABLED__ = true;
+      }
+    })();
+  </script>
+
+  <!-- App entry -->
+  <script type="module" charset="utf-8" src="/src/main.js?v=147-live-ui-151-mobile-polish-152-premium-classic-skin-153-game-skin-refresh-157-baraban-professional-rewards-158-card-size-telegram-admin-159-emoji-mobile-logo-160-curated-card-skins-161-mobile-card-size-162-game-smooth"></script>
+
+  <!-- PWA service worker -->
+  <script>
+    // Disabled for now: the game is online-only and stale SW cache hid new UI updates on mobile.
+  </script>
+</body>
+</html>
+

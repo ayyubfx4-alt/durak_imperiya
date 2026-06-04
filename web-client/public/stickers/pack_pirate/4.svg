@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="g4" cx="34%" cy="24%" r="78%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".42"/>
+      <stop offset=".35" stop-color="#f59e0b" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#05050c" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="13" stdDeviation="10" flood-color="#000000" flood-opacity=".62"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#f59e0b" flood-opacity=".50"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="42" fill="transparent"/>
+  <ellipse cx="128" cy="132" rx="88" ry="76" fill="url(#g4)"/>
+  <ellipse cx="124" cy="207" rx="66" ry="14" fill="#000" opacity=".32"/>
+  <circle cx="190" cy="68" r="30" fill="#090914" opacity=".82" stroke="#f59e0b" stroke-opacity=".72" stroke-width="5"/>
+  <g filter="url(#shadow)" transform="rotate(-5 128 128)">
+    <text x="128" y="136" text-anchor="middle" dominant-baseline="middle"
+      font-family="Apple Color Emoji,Segoe UI Emoji,Noto Color Emoji,Arial,sans-serif"
+      font-size="138">🏴‍☠️</text>
+  </g>
+  <g filter="url(#shadow)">
+    <text x="190" y="70" text-anchor="middle" dominant-baseline="middle"
+      font-family="Apple Color Emoji,Segoe UI Emoji,Noto Color Emoji,Arial,sans-serif"
+      font-size="28">👍</text>
+  </g>
+  <path d="M63 52 C91 29 163 28 194 54" fill="none" stroke="#fff" stroke-opacity=".28" stroke-width="8" stroke-linecap="round"/>
+  <text x="128" y="236" text-anchor="middle" font-family="Inter,Arial,sans-serif" font-size="13" font-weight="900" fill="#fff1b8" opacity=".55">PIRATE 4</text>
+</svg>
