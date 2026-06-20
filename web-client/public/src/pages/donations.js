@@ -1,4 +1,4 @@
-// Donations — REAL Stripe payments (PRO v5)
+﻿// Donations — REAL Stripe payments (PRO v5)
 // • Click "Donat" → Stripe Checkout opens → after success webhook records the donation.
 // • Top donors list loads from /api/donations (real only, fake removed).
 // • Success / cancel banners show if URL contains ?donation=success/cancel
@@ -6,7 +6,7 @@ import { h } from '../ui.js';
 import { api } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { attachGoldScrollIndicator } from '../scrollIndicator.js';
 
 const PRESET_AMOUNTS = [1, 5, 10, 25, 50, 100];
@@ -161,44 +161,43 @@ export async function renderDonations(root, params = {}) {
   board.appendChild(listBox);
   scroll.appendChild(board);
 
-  try {
-    const list = await api.donationsList(100);
-    if (!list.length) {
-      listBox.appendChild(h('div', {
-        class: 'muted text-c',
-        style: 'padding:32px 14px;line-height:1.6;font-size:13px'
-      }, [
-        h('div', { style: 'font-size:42px;opacity:.5;margin-bottom:10px' }, ['🌟']),
-        h('div', { style: 'font-weight:700' }, ['Hozircha donatorlar yo\'q']),
-        h('div', { style: 'margin-top:6px;font-size:12px' }, ['Birinchi donator bo\'ling va doim yodda qolasiz!']),
-      ]));
-    } else {
-      list.forEach((d, i) => {
-        listBox.appendChild(h('div', { class: 'list-item' }, [
-          h('div', { style: 'display:flex;align-items:center;gap:12px;flex:1;min-width:0' }, [
-            h('div', {
-              style: `width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;flex-shrink:0;
-                      background:${i === 0 ? 'linear-gradient(180deg,#fff1bd,#c89237)' : i === 1 ? 'linear-gradient(180deg,#e0e0e0,#9e9e9e)' : i === 2 ? 'linear-gradient(180deg,#d4a373,#8a4a1a)' : 'rgba(216,179,95,.15)'};
-                      color:${i < 3 ? '#2a1308' : 'var(--rc-text-bright)'};
-                      border:1.5px solid rgba(216,179,95,.5)`,
-            }, [i === 0 ? '👑' : String(i + 1)]),
-            h('div', { style: 'min-width:0;flex:1' }, [
-              h('div', { style: 'font-weight:800;color:var(--rc-text-bright);white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, [
-                (d.name || d.display_name || 'Anonim') + ' ✓',
-              ]),
-              d.message ? h('div', { class: 'muted', style: 'font-size:11px;margin-top:2px;font-style:italic' }, [`"${d.message}"`]) : null,
-            ].filter(Boolean)),
-          ]),
-          h('div', { class: 'badge gold coin-shimmer', style: 'font-size:14px;font-weight:900;padding:5px 12px' }, [
-            `$${((d.amountUsdCents || d.amount_usd_cents || 0) / 100).toFixed(2)}`,
-          ]),
-        ]));
-      });
-    }
-  } catch (e) {
-    listBox.appendChild(h('div', { class: 'p-16 error text-c' }, [e.message || 'Yuklab bo\'lmadi']));
-  }
+  await renderTopDonors(listBox);
   return detachScroll;
+}
+
+async function renderTopDonors(container) {
+  try {
+    const donors = await api.donationsList(100);
+    container.innerHTML = '';
+
+    if (!donors?.length) {
+      container.appendChild(h('div', { class: 'donors-empty muted text-c' }, [
+        h('span', { class: 'donors-empty-icon' }, ['🌟']),
+        h('p', {}, ['Hozircha donatorlar yo\'q']),
+        h('p', { class: 'donors-empty-sub' }, ['Birinchi donator bo\'ling va doim yodda qolasiz!']),
+      ]));
+      return;
+    }
+
+    const list = h('ol', { class: 'donors-list' });
+    donors.slice(0, 100).forEach((donor, i) => {
+      const rank = donor.rank || i + 1;
+      const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+      const cents = Number(donor.amountUsdCents ?? donor.amount_usd_cents ?? Math.round(Number(donor.amountUsd || 0) * 100));
+      list.appendChild(h('li', { class: `donor-item ${rank <= 3 ? 'top3' : ''}` }, [
+        h('span', { class: 'donor-rank' }, [medal]),
+        h('div', { class: 'donor-info' }, [
+          h('strong', { class: 'donor-name' }, [donor.name || donor.display_name || 'Anonim']),
+          donor.message ? h('p', { class: 'donor-message' }, [`"${String(donor.message).slice(0, 80)}"`]) : null,
+        ].filter(Boolean)),
+        h('span', { class: 'donor-amount' }, [`$${(cents / 100).toFixed(2)}`]),
+      ]));
+    });
+    container.appendChild(list);
+  } catch (e) {
+    container.innerHTML = '';
+    container.appendChild(h('p', { class: 'donors-error' }, [e.message || "Ro'yxat yuklanmadi"]));
+  }
 }
 
 async function resolveDonationCheckout(params = {}) {

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { query, withTransaction } from '../db.js';
+import { withTransaction } from '../db.js';
 import { HttpError } from '../middleware/error.js';
 
 const ADMOB_KEYS_URL = process.env.ADMOB_SSV_KEYS_URL || 'https://www.gstatic.com/admob/reward/verifier-keys.json';

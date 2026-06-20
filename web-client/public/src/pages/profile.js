@@ -1,9 +1,10 @@
-import { h } from '../ui.js';
+﻿import { h } from '../ui.js';
 import { api, clearToken } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { avatarColorFor, avatarLetter } from '../cards.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { avatarColorFor, avatarLetter, flagEmoji } from '../cards.js';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
+import { t } from '../i18n.js';
 
 let TAB = 'showcase';
 let PROFILE_DATA = null;
@@ -34,6 +35,39 @@ const RARITY_LABEL = {
   legendary: 'Legend',
 };
 
+function tSafe(key, fallback) {
+  const value = t(key);
+  return value && value !== key ? value : fallback;
+}
+
+function packTotal(pack) {
+  return Number(pack.total || pack.size || (pack.stickers || []).length || 0);
+}
+
+function packPreviewImage(pack) {
+  const first = (Array.isArray(pack.preview) && pack.preview[0])
+    || (Array.isArray(pack.stickers) && pack.stickers[0])
+    || null;
+  return first?.img || '';
+}
+
+function stickerVisual(src, label, className = '') {
+  if (!src) return h('span', { class: className }, [label || '🎭']);
+  return h('img', {
+    class: className,
+    src,
+    alt: label || 'Sticker',
+    loading: 'lazy',
+    onerror: (e) => {
+      e.currentTarget.style.display = 'none';
+      const parent = e.currentTarget.parentElement;
+      if (parent && !parent.querySelector('.sticker-visual-fallback')) {
+        parent.appendChild(h('span', { class: 'sticker-visual-fallback' }, [label || '🎭']));
+      }
+    },
+  });
+}
+
 export async function renderProfile(root) {
   root.innerHTML = '';
   const wrap = h('div', { class: 'screen bg-lobby profile-premium-screen' });
@@ -41,11 +75,11 @@ export async function renderProfile(root) {
 
   wrap.appendChild(h('div', { class: 'lobby-topbar profile-topbar' }, [
     h('button', { class: 'btn-icon', onclick: () => { sfx.play('click'); navigate('home'); } }, ['◀']),
-    h('div', { class: 'title' }, ['Profil']),
+    h('div', { class: 'title' }, [tSafe('profile.title', 'Profil')]),
     h('button', { class: 'btn-icon', onclick: () => openPaymentModal(root, 'gold') }, ['＋']),
   ]));
   const shell = h('div', { class: 'profile-premium-scroll scroll' }, [
-    h('div', { class: 'profile-loading-card' }, ['Profil yuklanmoqda...']),
+    h('div', { class: 'profile-loading-card' }, [tSafe('profile.loading', 'Profil yuklanmoqda...')]),
   ]);
   wrap.appendChild(shell);
 
@@ -57,7 +91,7 @@ export async function renderProfile(root) {
     state.user = data.user;
   } catch (err) {
     shell.innerHTML = '';
-    shell.appendChild(h('div', { class: 'section-card' }, [err.message || 'Profil yuklanmadi']));
+    shell.appendChild(h('div', { class: 'section-card' }, [err.message || tSafe('profile.load_failed', 'Profil yuklanmadi')]));
     return;
   }
 
@@ -96,7 +130,7 @@ function switchProfileTab(key) {
 }
 
 function heroCard(root, me, data) {
-  const name = me.nickname ? `@${me.nickname}` : me.username;
+  const name = `${flagEmoji(me.country_code) || ''} ${me.nickname ? `@${me.nickname}` : me.username}`.trim();
   const premium = me.premium_until && new Date(me.premium_until) > new Date();
   const season = Math.max(0, Number(me.games_won || 0));
   const total = Math.max(0, Number(me.games_played || 0));
@@ -113,20 +147,20 @@ function heroCard(root, me, data) {
         h('div', { class: 'profile-name' }, [name || 'Player']),
         h('div', { class: 'profile-rank-line' }, [
           rankBadge(me),
-          premium ? h('span', { class: 'mini-pro' }, ['PRO']) : h('span', { class: 'mini-muted' }, ['Free']),
+          premium ? h('span', { class: 'mini-pro' }, ['PRO']) : h('span', { class: 'mini-muted' }, [tSafe('profile.free', 'Free')]),
         ]),
       ]),
     ]),
     h('div', { class: 'profile-wallet-panel' }, [
       walletRow('👑', 'Gold Coin', me.gold_coins || 0, () => openPaymentModal(root, 'gold')),
-      walletRow('💵', 'Dollar', me.coins || 0, () => openPaymentModal(root, 'dollar')),
-      walletRow('🏆', 'Yutuqlar', `${season}/${total}`, () => switchProfileTab('showcase')),
+      walletRow('💵', tSafe('profile.dollar', 'Dollar'), me.coins || 0, () => openPaymentModal(root, 'dollar')),
+      walletRow('🏆', tSafe('profile.victories', 'Yutuqlar'), `${season}/${total}`, () => switchProfileTab('showcase')),
     ]),
     h('div', { class: 'profile-season-grid' }, [
-      seasonCell('⭐', 'G‘alaba', me.games_won || 0),
-      seasonCell('💵', 'Dollar', compact(me.coins || 0)),
-      seasonCell('🏆', 'Sticker', stickerCount),
-      seasonCell('😀', 'Emoji', emojiCount),
+      seasonCell('⭐', tSafe('profile.victory_short', 'G‘alaba'), me.games_won || 0),
+      seasonCell('💵', tSafe('profile.dollar', 'Dollar'), compact(me.coins || 0)),
+      seasonCell('🏆', tSafe('profile.stickers', 'Sticker'), stickerCount),
+      seasonCell('😀', tSafe('profile.emoji', 'Emoji'), emojiCount),
     ]),
   ]);
 }
@@ -150,10 +184,10 @@ function seasonCell(icon, label, value) {
 
 function tabs() {
   return h('div', { class: 'premium-profile-tabs' }, [
-    tab('showcase', '🏅 Yutuqlar'),
-    tab('stickers', '🎭 Stikerlar'),
-    tab('emoji', '😀 Emoji'),
-    tab('shop', '🛒 Sotib olish'),
+    tab('showcase', `🏅 ${tSafe('profile.achievements', 'Yutuqlar')}`),
+    tab('stickers', `🎭 ${tSafe('profile.stickers', 'Stikerlar')}`),
+    tab('emoji', `😀 ${tSafe('profile.emoji', 'Emoji')}`),
+    tab('shop', `🛒 ${tSafe('profile.buy_items', 'Sotib olish')}`),
   ]);
 }
 
@@ -310,6 +344,8 @@ function renderStickerWall(body, root, data) {
 function stickerPackCard(root, pack) {
   const owned = Number(pack.owned || 0);
   const locked = owned <= 0 && pack.priceGold > 0;
+  const total = packTotal(pack);
+  const cover = packPreviewImage(pack);
   return h('button', {
     class: `sticker-pack-card rarity-${pack.rarity} ${locked ? 'locked' : 'owned'} ${ACTIVE_STICKER_PACK_ID === pack.id ? 'selected' : ''}`,
     onclick: () => {
@@ -318,9 +354,9 @@ function stickerPackCard(root, pack) {
       switchProfileTab('stickers');
     },
   }, [
-    h('div', { class: 'sticker-coin' }, [STICKER_FACE[pack.id] || '🎭']),
+    h('div', { class: 'sticker-coin sticker-coin-img' }, [stickerVisual(cover, STICKER_FACE[pack.id] || pack.name || 'Sticker')]),
     h('strong', {}, [pack.name]),
-    h('span', {}, [`${RARITY_LABEL[pack.rarity] || pack.rarity} · ${owned}/${pack.total}`]),
+    h('span', {}, [`${RARITY_LABEL[pack.rarity] || pack.rarity} · ${owned}/${total}`]),
     locked ? h('em', {}, [`${pack.priceGold} GC`]) : h('em', {}, ['OCHILGAN']),
   ]);
 }
@@ -328,12 +364,14 @@ function stickerPackCard(root, pack) {
 function stickerCollectionPanel(root, pack) {
   const owned = Number(pack.owned || 0);
   const open = owned > 0 || pack.priceGold === 0;
+  const total = packTotal(pack);
+  const cover = packPreviewImage(pack);
   return h('div', { class: 'inline-pack-panel sticker-inline-panel' }, [
     h('div', { class: 'inline-pack-head' }, [
-      h('div', { class: 'sheet-big-icon' }, [STICKER_FACE[pack.id] || '🎭']),
+      h('div', { class: 'sheet-big-icon sheet-big-img' }, [stickerVisual(cover, STICKER_FACE[pack.id] || pack.name || 'Sticker')]),
       h('div', {}, [
         h('h3', {}, [pack.name]),
-        h('p', {}, [`${owned}/${pack.total} ochilgan · ${RARITY_LABEL[pack.rarity] || pack.rarity}`]),
+        h('p', {}, [`${owned}/${total} ochilgan · ${RARITY_LABEL[pack.rarity] || pack.rarity}`]),
       ]),
     ]),
     h('div', { class: 'inline-pack-grid' },
@@ -342,7 +380,7 @@ function stickerCollectionPanel(root, pack) {
         title: s.name,
         onclick: () => open ? toast(`${s.name} tanlandi`, 'success') : toast('Avval packni oching', 'info'),
       }, [
-        h('span', {}, [STICKER_FACE[pack.id] || '🎭']),
+        stickerVisual(s.img, s.name || pack.name || 'Sticker'),
         h('small', {}, [String((idx % 16) + 1)]),
       ]))
     ),
@@ -372,14 +410,16 @@ function stickerCollectionPanel(root, pack) {
 
 function openStickerPack(root, pack) {
   const owned = Number(pack.owned || 0);
+  const total = packTotal(pack);
+  const cover = packPreviewImage(pack);
   const bg = h('div', { class: 'profile-modal-bg' });
   const modal = h('div', { class: 'sticker-sheet-modal' }, [
     h('button', { class: 'profile-modal-close', onclick: () => bg.remove() }, ['×']),
     h('div', { class: 'sticker-sheet-head' }, [
-      h('div', { class: 'sheet-big-icon' }, [STICKER_FACE[pack.id] || '🎭']),
+      h('div', { class: 'sheet-big-icon sheet-big-img' }, [stickerVisual(cover, STICKER_FACE[pack.id] || pack.name || 'Sticker')]),
       h('div', {}, [
         h('h2', {}, [pack.name]),
-        h('p', {}, [`${owned}/${pack.total} ochilgan · ${RARITY_LABEL[pack.rarity] || pack.rarity}`]),
+        h('p', {}, [`${owned}/${total} ochilgan · ${RARITY_LABEL[pack.rarity] || pack.rarity}`]),
       ]),
     ]),
     h('div', { class: 'sticker-sheet-grid' },
@@ -390,7 +430,7 @@ function openStickerPack(root, pack) {
           title: s.name,
           onclick: () => open ? toast(`${s.name} tanlandi`, 'success') : toast('Avval packni oching', 'info'),
         }, [
-          h('span', {}, [STICKER_FACE[pack.id] || '🎭']),
+          stickerVisual(s.img, s.name || pack.name || 'Sticker'),
           h('small', {}, [String((idx % 16) + 1)]),
         ]);
       })
@@ -730,6 +770,7 @@ function drawProfileV80(wrap, root, data) {
   const me = data.user || {};
   const publicProfile = !!data.publicProfile;
   const name = me.nickname || me.username || 'Player';
+  const profileName = `${flagEmoji(me.country_code) || ''} ${name}`.trim();
   const handle = `@${String(name).replace(/^@/, '').toLowerCase()}`;
   const gold = Number(me.gold_coins || 0);
   const diamonds = Number(me.elon_stickers || 0);
@@ -763,7 +804,7 @@ function drawProfileV80(wrap, root, data) {
         ]),
         h('div', { class: 'rp-identity' }, [
           hasPremium ? h('span', { class: 'rp-premium-badge' }, ['♛ PREMIUM']) : h('span', { class: 'rp-premium-badge muted' }, ['ODDIY']),
-          h('h1', {}, [name, hasPremium ? h('i', { class: 'rp-verified' }, ['✓']) : null].filter(Boolean)),
+          h('h1', {}, [profileName, hasPremium ? h('i', { class: 'rp-verified' }, ['✓']) : null].filter(Boolean)),
           h('p', {}, [handle]),
           h('div', { class: 'rp-xp-row' }, [
             h('div', { class: 'rp-level-shield' }, [String(level)]),
@@ -845,7 +886,7 @@ function drawProfileV80(wrap, root, data) {
           h('article', { class: 'rp-balance-card' }, [
             h('div', {}, [
               h('small', {}, [publicProfile ? 'PUBLIC PROFIL' : 'GOLD COIN BALANSI']),
-              h('strong', {}, [publicProfile ? (me.nickname || me.username || 'Player') : `🪙 ${rpNumber(gold)}`]),
+              h('strong', {}, [publicProfile ? (me.nickname || me.username || 'Player') : `GC ${rpNumber(gold)}`]),
             ]),
             h('button', { onclick: () => publicProfile ? navigate('leaderboard') : openPaymentModal(root, 'gold') }, [publicProfile ? '›' : '+']),
           ]),
@@ -881,7 +922,7 @@ function rpTopbar(root, gold, diamonds, options = {}) {
     h('button', { class: 'rp-back-btn', onclick: () => { sfx.play('click'); navigate('home'); } }, ['‹']),
     h('div', { class: 'rp-title' }, ['PROFIL']),
     h('div', { class: 'rp-wallets' }, [
-      rpWallet('🪙', gold, () => openPaymentModal(root, 'gold')),
+      rpWallet('GC', gold, () => openPaymentModal(root, 'gold')),
       rpWallet('💎', diamonds, () => navigate('shop')),
     ]),
   ]);

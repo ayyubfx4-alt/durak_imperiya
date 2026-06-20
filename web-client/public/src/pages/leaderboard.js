@@ -2,7 +2,7 @@ import { h } from '../ui.js';
 import { api } from '../api.js';
 import { navigate } from '../router.js';
 import { state } from '../state.js';
-import { avatarColorFor, avatarLetter } from '../cards.js';
+import { avatarColorFor, avatarLetter, flagEmoji, countryName } from '../cards.js';
 
 let CATEGORY = 'global';
 let REGION = 'global';
@@ -22,6 +22,7 @@ const CATEGORIES = [
   ['money', '💲', "ENG KO'P DURAK $", "Eng boy o'yinchilar", 'coins'],
   ['winrate', '🎯', "ENG YUQORI G'ALABA %", "Winrate bo'yicha", 'season'],
   ['streak', '🔥', 'ENG YUQORI SERIYA', "Uzluksiz g'alabalar", 'season'],
+  ['countries', '🌍', 'DAVLATLAR TOP', "Qaysi davlat ko'proq yutgan", 'countries'],
   ['pro', '♛', 'PROFESSIONAL TOP', "Pro o'yinchilar", 'season'],
 ];
 
@@ -760,12 +761,13 @@ export async function renderLeaderboard(root) {
   try {
     const category = CATEGORIES.find((c) => c[0] === CATEGORY) || CATEGORIES[0];
     const sort = category[4];
+    const countryMode = category[0] === 'countries';
     const [rows, overview, myRank] = await Promise.all([
-      api.leaderboard(sort, 100),
+      countryMode ? api.countryLeaderboard() : api.leaderboard(sort, 100),
       api.leaderboardOverview().catch(() => null),
-      api.leaderboardMe(sort).catch(() => null),
+      countryMode ? Promise.resolve(null) : api.leaderboardMe(sort).catch(() => null),
     ]);
-    const ranked = rankRows(normalizeRows(rows || []), category[0]).slice(0, 50);
+    const ranked = countryMode ? normalizeCountryRows(rows || []).slice(0, 50) : rankRows(normalizeRows(rows || []), category[0]).slice(0, 50);
     layout.querySelector('.rr-side').replaceWith(renderSide(myRank));
     main.innerHTML = '';
     main.appendChild(renderRegionTabs());
@@ -796,7 +798,7 @@ function renderTop() {
       ]),
     ]),
     h('div', { class: 'rr-wallets' }, [
-      wallet('🪙', fmt(me.gold_coins || 0), () => navigate('shop', { tab: 'gold' })),
+      wallet('GC', fmt(me.gold_coins || 0), () => navigate('shop', { tab: 'gold' })),
       wallet('💵', fmt(me.coins || 0), () => navigate('shop', { tab: 'dollars' })),
     ]),
     h('nav', { class: 'rr-actions' }, [
@@ -845,7 +847,7 @@ function renderMyPlace(myRank) {
     h('div', {}, [
       h('span', {}, [myRank?.rank ? String(myRank.rank) : '-']),
       h('strong', {}, [cleanName(user)]),
-      h('em', {}, [`${fmt(user.coins || 0)} 🪙`]),
+      h('em', {}, [`${fmt(user.coins || 0)} GC`]),
     ]),
   ]);
 }
@@ -864,6 +866,7 @@ function renderRegionTabs() {
 }
 
 function renderTable(rows, category) {
+  if (category?.[0] === 'countries') return renderCountryTable(rows);
   return h('section', { class: 'rr-table-panel' }, [
     h('div', { class: 'rr-table-head' }, [
       h('span', {}, ["O'RIN"]),
@@ -929,7 +932,7 @@ function renderRightPanel(rows, overview, myRank, cleanups = []) {
       h('div', { class: 'rr-laurel' }, [renderAvatar(leader)]),
       h('h2', {}, [cleanName(leader)]),
       h('strong', {}, [rankTitle(leader)]),
-      h('span', {}, [`${leader.country || '🇺🇿'} O'ZBEKISTON`]),
+      h('span', {}, [`${flagEmoji(leader.country_code) || '🌍'} ${countryName(leader.country_code) || 'Davlat tanlanmagan'}`]),
       h('small', {}, [`ID: ${String(leader.id || '-').slice(0, 10)}`]),
     ] : [h('p', {}, ["Hali lider yo'q"])]),
     h('section', { class: 'rr-panel rr-stats' }, [
@@ -938,7 +941,7 @@ function renderRightPanel(rows, overview, myRank, cleanups = []) {
         stat("O'YINLAR SONI", fmt(leader?.games_played || 0)),
         stat("G'ALABA %", `${calcWinRate(leader || {})}%`),
         stat('ENG YUQORI SERIYA', leader?.win_streak || 0),
-        stat('JAMI YUTGAN', `🪙 ${fmt(leader?.coins || 0)}`),
+        stat('JAMI YUTGAN', `GC ${fmt(leader?.coins || 0)}`),
       ]),
     ]),
     h('section', { class: 'rr-panel rr-prizes' }, [
@@ -960,7 +963,7 @@ function prize(n, overview) {
   return h('div', {}, [
     h('b', {}, [`${n}-O'RIN`]),
     h('span', {}, [chest]),
-    h('strong', {}, [`🪙 ${fmt(item?.gold_coins || fallback)}`]),
+    h('strong', {}, [`GC ${fmt(item?.gold_coins || fallback)}`]),
     h('small', {}, [n === 1 ? 'LEGEND RAMKA' : n === 2 ? 'MASTER RAMKA' : 'DIAMOND RAMKA']),
   ]);
 }
@@ -979,6 +982,43 @@ function stat(label, value) {
 
 function normalizeRows(rows) {
   return rows;
+}
+
+function normalizeCountryRows(rows) {
+  return [...rows].sort((a, b) =>
+    Number(b.total_wins || 0) - Number(a.total_wins || 0) ||
+    Number(b.total_players || 0) - Number(a.total_players || 0)
+  );
+}
+
+function renderCountryTable(rows) {
+  return h('section', { class: 'rr-table-panel' }, [
+    h('div', { class: 'rr-table-head' }, [
+      h('span', {}, ["O'RIN"]),
+      h('span', {}, ['DAVLAT']),
+      h('span', {}, ["O'YINCHI"]),
+      h('span', {}, ["G'ALABA"]),
+      h('span', {}, ["G'ALABA %"]),
+    ]),
+    h('div', { class: 'rr-table-body' }, rows.length
+      ? rows.map((row, index) => {
+        const code = row.country_code === 'ZZ' ? '' : row.country_code;
+        return h('button', { class: `rr-player-row rank-${index < 3 ? index + 1 : 'normal'}` }, [
+          h('div', { class: 'rr-place' }, [index < 3 ? medalRank(index + 1) : h('span', {}, [String(index + 1)])]),
+          h('div', { class: 'rr-player' }, [
+            h('span', { class: 'rr-avatar rr-country-avatar' }, [flagEmoji(code) || '🌍']),
+            h('div', {}, [
+              h('strong', {}, [countryName(code) || 'Davlat tanlanmagan']),
+              h('small', {}, [`${code || '--'} global reyting`]),
+            ]),
+          ]),
+          h('div', { class: 'rr-money' }, [h('b', {}, [fmt(row.total_players || 0)]), h('small', {}, ["O'YINCHI"])]),
+          h('div', { class: 'rr-winrate' }, [h('b', {}, [fmt(row.total_wins || 0)]), h('small', {}, ["G'ALABA"])]),
+          h('div', { class: 'rr-streak' }, [h('span', {}, ['%']), h('b', {}, [String(row.win_rate || '0')]), h('small', {}, ['WINRATE'])]),
+        ]);
+      })
+      : [h('div', { class: 'rr-empty' }, ['Davlat statistikasi hali yo‘q'])]),
+  ]);
 }
 
 function rankRows(rows, category) {
@@ -1005,7 +1045,8 @@ function cleanName(u) {
 }
 
 function displayName(u) {
-  return `@${cleanName(u)}`;
+  const flag = flagEmoji(u?.country_code);
+  return `${flag ? `${flag} ` : ''}@${cleanName(u)}`;
 }
 
 function calcWinRate(u) {

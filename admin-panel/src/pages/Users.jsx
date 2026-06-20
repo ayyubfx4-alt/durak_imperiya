@@ -8,6 +8,18 @@ import { useToast } from '../components/Toast.jsx';
 
 const emptyAdjust = { amount: 0, reason: '' };
 const defaultMute = { minutes: 60, reason: 'admin mute' };
+const PREMIUM_PRESETS = [
+  { label: '1 kun', days: 1 },
+  { label: '1 hafta', days: 7 },
+  { label: '1 oy', days: 30 },
+  { label: '1 yil', days: 365 },
+];
+const MUTE_PRESETS = [
+  { label: '15 daqiqa', minutes: 15 },
+  { label: '1 soat', minutes: 60 },
+  { label: '1 kun', minutes: 1440 },
+  { label: '7 kun', minutes: 10080 },
+];
 
 export default function Users() {
   const [rows, setRows] = useState([]);
@@ -174,11 +186,37 @@ export default function Users() {
 
               <div className="card space-y-3 p-4">
                 <div className="font-bold">Premium va mute</div>
-                <div className="grid grid-cols-[1fr_auto] gap-2">
-                  <input className="h-10 px-3" type="number" min="1" max="3650" value={premiumDays} onChange={(e) => setPremiumDays(e.target.value)} />
-                  <button className="btn btn-primary" onClick={() => doAction('Premium berildi', () => api.grantPremium(detail.user.id, { days: Number(premiumDays) || 30 }))}>Premium</button>
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Premium davri</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {PREMIUM_PRESETS.map((preset) => (
+                    <button
+                      key={preset.days}
+                      className={`btn ${Number(premiumDays) === preset.days ? 'btn-primary' : ''}`}
+                      onClick={() => setPremiumDays(preset.days)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
                 </div>
-                <input className="h-10 w-full px-3" type="number" min="1" value={muteForm.minutes} onChange={(e) => setMuteForm((f) => ({ ...f, minutes: e.target.value }))} />
+                <button
+                  className="btn btn-primary w-full"
+                  onClick={() => doAction('Premium berildi', () => api.grantPremium(detail.user.id, { days: Number(premiumDays) || 30 }))}
+                >
+                  Premium berish: {PREMIUM_PRESETS.find((p) => p.days === Number(premiumDays))?.label || `${premiumDays} kun`}
+                </button>
+
+                <div className="pt-2 text-xs font-bold uppercase tracking-wide text-slate-400">Mute muddati</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {MUTE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.minutes}
+                      className={`btn ${Number(muteForm.minutes) === preset.minutes ? 'btn-primary' : ''}`}
+                      onClick={() => setMuteForm((f) => ({ ...f, minutes: preset.minutes }))}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
                 <input className="h-10 w-full px-3" placeholder="Mute sababi" value={muteForm.reason} onChange={(e) => setMuteForm((f) => ({ ...f, reason: e.target.value }))} />
                 <div className="grid grid-cols-2 gap-2">
                   <button className="btn" onClick={() => doAction('Mute berildi', () => api.muteUser(detail.user.id, { ...muteForm, minutes: Number(muteForm.minutes) || 60 }))}>Mute</button>

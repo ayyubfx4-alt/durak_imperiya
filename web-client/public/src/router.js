@@ -7,6 +7,30 @@ let activeCleanup = null;
 
 export function route(name, render) { routes.set(name, render); }
 
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
+}
+
+function renderRouteError(root, routeName, err) {
+  console.error('[router] route render failed:', routeName, err);
+  if (royalLoaderSource() === 'route') hideRoyalLoader('route');
+  root.innerHTML = `
+    <div class="screen center">
+      <div class="card" style="max-width:420px;text-align:center">
+        <h1>Sahifa ochilmadi</h1>
+        <p class="muted">${escapeHtml(err?.message || "Iltimos, qayta urinib ko'ring.")}</p>
+        <button class="btn primary" data-route-retry>Qayta urinish</button>
+      </div>
+    </div>`;
+  root.querySelector('[data-route-retry]')?.addEventListener('click', () => mount());
+}
+
 export function navigate(name, params = {}, options = {}) {
   const url = `#/${name}${params && Object.keys(params).length ? `?${new URLSearchParams(params)}` : ''}`;
   if (!options.silent) showRouteLoader(name, params);
@@ -55,8 +79,8 @@ export function mount() {
     cleanup.then((cb) => {
       if (typeof cb === 'function') activeCleanup = cb;
       finishRouteLoader();
-    }).catch(() => {
-      if (royalLoaderSource() === 'route') hideRoyalLoader('route');
+    }).catch((err) => {
+      renderRouteError(root, r.name, err);
     });
   } else if (typeof cleanup === 'function') {
     activeCleanup = cleanup;

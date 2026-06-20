@@ -1,12 +1,13 @@
-import { h } from '../ui.js';
+﻿import { h } from '../ui.js';
 import { api, clearToken } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
 import { avatarColorFor, avatarLetter } from '../cards.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
-import { PREF_DEFAULTS, localMusicPreference, localPreferenceValue, markMusicUserSet, musicWasUserSet, setPrefValue } from '../preferences.js?v=111-encoding-fix';
-import { applyRuntimeSettings, normalizeRuntimeSettings } from '../runtimeSettings.js?v=111-encoding-fix';
-import { setLocale } from '../i18n.js';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
+import { PREF_DEFAULTS, localMusicPreference, localPreferenceValue, markMusicUserSet, musicWasUserSet, setPrefValue } from '../preferences.js?v=164-i18n-audio';
+import { applyRuntimeSettings, normalizeRuntimeSettings } from '../runtimeSettings.js?v=164-i18n-audio';
+import { getLocale, setLocale } from '../i18n.js';
+import { countryOptions, normalizeCountryCode } from '../countries.js';
 
 const DEFAULT_SETTINGS = {
   ...PREF_DEFAULTS,
@@ -20,7 +21,7 @@ const DEFAULT_SETTINGS = {
   pref_antialiasing: true,
   pref_effects_quality: 'high',
   pref_lighting_quality: 'high',
-  pref_sound: true,
+  pref_sound: false,
   pref_music: false,
   pref_master_volume: 80,
   pref_music_volume: 50,
@@ -57,7 +58,7 @@ export async function renderSettings(root) {
   const draft = normalizeSettings({
     ...DEFAULT_SETTINGS,
     ...(remote.settings || {}),
-    pref_language: remote.settings?.pref_language || user.locale || DEFAULT_SETTINGS.pref_language,
+    pref_language: getLocale() || remote.settings?.pref_language || user.locale || DEFAULT_SETTINGS.pref_language,
   });
   persistLocalPrefs(draft);
 
@@ -163,6 +164,7 @@ function renderSection(section, user, draft, root, fileInput) {
         settingRow('D', 'DARK MODE', "Qorong'i mavzu", toggleControl('pref_dark_mode', draft)),
         settingRow('V', 'VIBRATSIYA', "Vibratsiya yoqish/o'chirish", toggleControl('pref_vibration', draft)),
         settingRow('L', 'TIL', "O'yin tili", languageSelect(draft)),
+        settingRow('F', 'DAVLAT BAYROG‘I', 'Nickname yonida ko‘rinadigan davlat', countrySelectControl(user)),
         settingRow('H', "HUD KO'RINISHI", 'Interfeys kattaligi', segmentControl('pref_hud_size', draft, [
           ['compact', 'KOMPAKT'],
           ['middle', "O'RTA"],
@@ -217,7 +219,6 @@ function renderSection(section, user, draft, root, fileInput) {
         settingRow('J', 'JOYSTICK LOCK', 'Boshqaruvni qulflash', toggleControl('pref_joystick_lock', draft)),
         settingRow('R', "O'NG QO'L REJIMI", "Asosiy tugmalar o'ng tomonda", toggleControl('pref_right_action', draft)),
         settingRow('2', 'DOUBLE TAP', 'Ikki marta bosib yurish', toggleControl('pref_double_tap', draft)),
-        settingRow('T', 'NAVBAT SORT', 'Navbatga mos kartalarni oldinga chiqarish', toggleControl('pref_turn_sorting', draft)),
         settingRow('V', 'QIYMAT SORT', "Kartalarni qiymat bo'yicha tartiblash", toggleControl('pref_sort_value', draft)),
         settingRow('A', 'AVTO TARQATISH', 'Tarqatish animatsiyasini avtomatik boshqarish', toggleControl('pref_auto_deal', draft)),
       ]),
@@ -378,7 +379,7 @@ function languageSelect(draft) {
     onchange: (event) => {
       draft.pref_language = event.currentTarget.value;
       persistLocalPrefs(draft);
-      setLocale(draft.pref_language).catch(() => {});
+      setLocale(draft.pref_language, null, { reload: true }).catch(() => {});
       const screen = document.querySelector('.royal-settings-v83');
       if (screen) localizeSettingsScreen(screen, draft.pref_language);
     },
@@ -387,6 +388,28 @@ function languageSelect(draft) {
     option('ru', 'РУССКИЙ', draft.pref_language),
     option('en', 'ENGLISH', draft.pref_language),
   ]);
+}
+
+function countrySelectControl(user) {
+  const current = normalizeCountryCode(user?.country_code) || 'UZ';
+  return h('select', {
+    class: 'rs83-select',
+    value: current,
+    onchange: async (event) => {
+      const countryCode = normalizeCountryCode(event.currentTarget.value);
+      if (!countryCode) return;
+      try {
+        const res = await api.setCountry(countryCode);
+        if (!state.user) state.user = {};
+        state.user.country_code = res?.user?.country_code || countryCode;
+        user.country_code = state.user.country_code;
+        toast('Davlat bayrog‘i yangilandi', 'success');
+      } catch (err) {
+        event.currentTarget.value = current;
+        toast(err.message || 'Davlat saqlanmadi', 'error');
+      }
+    },
+  }, countryOptions(getLocale()).map((item) => option(item.code, item.label, current)));
 }
 
 function option(value, label, active) {
@@ -518,6 +541,9 @@ function persistLocalPrefs(settings) {
   }
   try {
     localStorage.setItem('locale', normalized.pref_language);
+    localStorage.setItem('pref_language', normalized.pref_language);
+    localStorage.setItem('durak.locale', normalized.pref_language);
+    localStorage.setItem('durak.locale.userSet', '1');
     document.documentElement.lang = normalized.pref_language;
   } catch (_) { /* ignore */ }
   sfx.configure?.({

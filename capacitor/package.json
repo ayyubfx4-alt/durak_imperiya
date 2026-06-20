@@ -9,6 +9,7 @@
     "open:ios": "cap open ios",
     "build:android": "cap sync android && cd android && ./gradlew bundleRelease",
     "build:apk": "cap sync android && cd android && ./gradlew assembleRelease",
+    "build:ios": "cap sync ios",
     "run:android": "cap run android",
     "run:ios": "cap run ios",
     "assets": "capacitor-assets generate"

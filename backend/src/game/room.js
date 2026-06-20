@@ -16,8 +16,67 @@ import { grantAvailableProfileRewards } from '../services/profileRewards.js';
 import { recordGameMetrics } from '../services/antibot.js';
 import { recordMatchResult } from '../services/tournamentEngine.js';
 import { recordUnlocksForGamesPlayed } from '../services/progression.js';
+import { endVoiceSession } from '../services/voiceChat.js';
 import { logger } from '../logger.js';
 import { unregisterRoom } from '../scaling/redisAdapter.js';
+
+const BOT_LEVELS = new Set(['easy', 'medium', 'hard']);
+const CONFIRMABLE_ACTIONS = new Set(['attack', 'defense', 'transfer', 'take']);
+const ACTION_CONFIRM_TIMEOUT_MS = 15_000;
+const ACTION_CONFIRM_RESUME_MS = 10_000;
+const PUBLIC_LIST_CACHE_TTL_MS = 5_000;
+const PUBLIC_LIST_BROADCAST_DEBOUNCE_MS = 300;
+
+function normalizeBotLevel(level) {
+  return BOT_LEVELS.has(level) ? level : 'medium';
+}
+
+export function botLevelFromRating(rating = 0) {
+  const value = Math.max(0, Number(rating || 0));
+  if (value < 12) return 'easy';
+  if (value < 65) return 'medium';
+  return 'hard';
+}
+
+function seatRating(seat = {}) {
+  return Number(seat.rankWins ?? seat.rank_wins ?? seat.rating ?? seat.gamesWon ?? seat.games_won ?? 0);
+}
+
+function botLevelForSeats(seats = [], fallback = 'medium') {
+  const humans = seats.filter((s) => s && !s.isBot);
+  if (!humans.length) return normalizeBotLevel(fallback);
+  const avg = humans.reduce((sum, seat) => sum + seatRating(seat), 0) / humans.length;
+  return botLevelFromRating(avg);
+}
+
+function applyEngineAction(gameState, playerId, action, payload = {}) {
+  switch (action) {
+    case 'attack':
+      return playAttack(gameState, playerId, payload?.card, { bluff: !!payload?.bluff, claimedRank: payload?.claimedRank });
+    case 'defense':
+      return playDefense(gameState, playerId, payload?.card);
+    case 'transfer':
+      return transferAttack(gameState, playerId, payload?.card);
+    case 'take':
+      return takeCards(gameState, playerId);
+    case 'pass':
+      return passAttack(gameState, playerId);
+    case 'challenge':
+      return challengeBluff(gameState, playerId, payload?.tableIdx);
+    default:
+      return { ok: false, error: 'unknown action' };
+  }
+}
+
+function actionLabel(action) {
+  switch (action) {
+    case 'attack': return 'Karta tashlash';
+    case 'defense': return 'Kartani urish';
+    case 'transfer': return "O'tkazish";
+    case 'take': return 'Olish';
+    default: return 'Harakat';
+  }
+}
 
 /**
  * RoomManager — keeps live rooms in memory, handles seating, bot fill, and game lifecycle.
@@ -30,12 +89,16 @@ export class RoomManager {
     this.io = io;
     /** @type {Map<string, Room>} */
     this.rooms = new Map();
+    this._publicListCache = null;
+    this._publicListCacheUntil = 0;
+    this._publicListBroadcastTimer = null;
   }
 
   createRoom(opts) {
     const code = opts.code || randomCode(6);
     const room = new Room(this, code, opts);
     this.rooms.set(code, room);
+    this.invalidatePublicListCache();
     return room;
   }
 
@@ -45,11 +108,23 @@ export class RoomManager {
     const r = this.rooms.get(code);
     if (r) r.cleanup();
     this.rooms.delete(code);
+    this.invalidatePublicListCache();
     this.broadcastPublicList();
   }
 
+  invalidatePublicListCache() {
+    this._publicListCache = null;
+    this._publicListCacheUntil = 0;
+  }
+
   broadcastPublicList() {
-    this.io?.emit?.('rooms:list', this.publicList());
+    if (this._publicListBroadcastTimer) return;
+    this._publicListBroadcastTimer = setTimeout(() => {
+      this._publicListBroadcastTimer = null;
+      this.invalidatePublicListCache();
+      this.io?.emit?.('rooms:list', this.publicList());
+    }, PUBLIC_LIST_BROADCAST_DEBOUNCE_MS);
+    this._publicListBroadcastTimer.unref?.();
   }
 
   /**
@@ -60,13 +135,35 @@ export class RoomManager {
    * Bot identities are hidden (they look like normal seats to the viewer).
    */
   publicList() {
+    const now = Date.now();
+    if (this._publicListCache && now < this._publicListCacheUntil) {
+      return this._publicListCache;
+    }
+    this._publicListCache = this._buildPublicList();
+    this._publicListCacheUntil = now + PUBLIC_LIST_CACHE_TTL_MS;
+    return this._publicListCache;
+  }
+
+  _buildPublicList() {
     return Array.from(this.rooms.values())
       .filter((r) => r.state.phase === 'lobby')
       .map((r) => ({
         code: r.code,
         host: r.host?.username,
         maxPlayers: r.maxPlayers,
-        seats: r.seats.map((s) => s ? { id: s.id, username: s.username, ready: s.ready, avatarColor: s.avatarColor, avatarLines: s.avatarLines, avatarPluses: s.avatarPluses, rankWins: s.rankWins } : null),
+        seats: r.seats.map((s) => s ? {
+          id: s.id,
+          username: s.username,
+          nickname: s.nickname || null,
+          avatar_url: s.avatar_url || null,
+          selected_avatar_frame: s.selected_avatar_frame || null,
+          country_code: s.country_code || null,
+          ready: s.ready,
+          avatarColor: s.avatarColor,
+          avatarLines: s.avatarLines,
+          avatarPluses: s.avatarPluses,
+          rankWins: s.rankWins,
+        } : null),
         taken: r.seats.filter(Boolean).length,
         realCount: r.seats.filter((s) => s && !s.isBot).length,
         stake: r.stake,
@@ -108,7 +205,7 @@ export class Room {
     this.throwInMode = opts.throwInMode === 'all' ? 'all' : 'neighbor';
     this.allowDraw = opts.allowDraw !== false;
     this.host = opts.host || null;
-    this.botLevel = opts.botLevel || 'medium';
+    this.botLevel = normalizeBotLevel(opts.botLevel);
 
     /** @type {Array<{id, username, isBot, botLevel, socketId, ready, joinedAt}>} */
     this.seats = Array.from({ length: this.maxPlayers }, () => null);
@@ -126,6 +223,11 @@ export class Room {
     this.createdAt = Date.now();
     this.turnDeadline = null;
     this.starting = false;
+    this.readyAutoStartInProgress = false;
+    this.pendingAction = null;
+    this.pendingActionTimer = null;
+    this.voicePending = null;
+    this.voicePendingTimer = null;
     this._finishing = false;
     this.stakeChargedHumanIds = [];
     this.humanActionStats = new Map();
@@ -203,6 +305,7 @@ export class Room {
 
   async forfeitPlayer(playerId, reason = 'forfeit') {
     if (!this.gameState || this.gameState.phase === 'ended') return false;
+    this.cancelPendingAction('Harakat bekor qilindi', { resumeTurn: false });
     const result = forfeit(this.gameState, playerId, reason);
     if (!result.ok) {
       logger.warn('forfeitPlayer failed: %s', result.error);
@@ -216,15 +319,16 @@ export class Room {
 
   async replaceWithBot(seatIdx) {
     const taken = new Set(this.seats.filter(Boolean).map((s) => s.username));
+    const preferredLevel = this.preferredBotLevel();
     let bot;
     try {
-      bot = await acquireBot({ excludeUsernames: taken });
+      bot = await acquireBot({ excludeUsernames: taken, preferredLevel });
     } catch (e) {
       logger.warn('acquireBot failed, using fallback name: %s', e.message);
       bot = {
         id: `bot-${uuid()}`,
         username: pickBotName(taken),
-        botLevel: this.botLevel,
+        botLevel: preferredLevel,
         rankWins: 0,
         avatarColor: 'gray',
         avatarLines: 0,
@@ -235,7 +339,7 @@ export class Room {
       id: bot.id,
       username: bot.username,
       isBot: true,
-      botLevel: bot.botLevel || this.botLevel,
+      botLevel: normalizeBotLevel(bot.botLevel || preferredLevel),
       rankWins: bot.rankWins,
       avatarColor: bot.avatarColor,
       avatarLines: bot.avatarLines,
@@ -279,18 +383,22 @@ export class Room {
     }
   }
 
+  preferredBotLevel() {
+    return botLevelForSeats(this.seats, this.botLevel);
+  }
+
   armQuickStartTimer() {
     if (this.isPrivate) return;
     if (this.state.phase !== 'lobby' || this.quickStartTimer) return;
     const humans = this.seats.filter((s) => s && !s.isBot);
     const hasEmptySeats = this.seats.some((s) => !s);
-    const allHumansReady = humans.length > 0 && humans.every((s) => s.ready || s.id === this.host?.id);
+    const allHumansReady = humans.length > 0 && humans.every((s) => s.ready);
     if (!hasEmptySeats || !allHumansReady || !this.host) return;
     this.quickStartTimer = setTimeout(async () => {
       this.quickStartTimer = null;
       if (this.state.phase !== 'lobby') return;
       const liveHumans = this.seats.filter((s) => s && !s.isBot);
-      const stillReady = liveHumans.length > 0 && liveHumans.every((s) => s.ready || s.id === this.host?.id);
+      const stillReady = liveHumans.length > 0 && liveHumans.every((s) => s.ready);
       if (!stillReady || !this.seats.some((s) => !s)) return;
       logger.debug(`quick-start filled bots for room ${this.code}`);
       await this.requestStart(this.host.id);
@@ -305,15 +413,16 @@ export class Room {
     const taken = new Set(this.seats.filter(Boolean).map((s) => s.username));
     for (let i = 0; i < this.seats.length; i++) {
       if (!this.seats[i]) {
+        const preferredLevel = this.preferredBotLevel();
         let bot;
         try {
-          bot = await acquireBot({ excludeUsernames: taken });
+          bot = await acquireBot({ excludeUsernames: taken, preferredLevel });
         } catch (e) {
           logger.warn('acquireBot failed, using fallback name: %s', e.message);
           bot = {
             id: `bot-${uuid()}`,
             username: pickBotName(taken),
-            botLevel: this.botLevel,
+            botLevel: preferredLevel,
             rankWins: 0,
             avatarColor: 'gray',
             avatarLines: 0,
@@ -325,7 +434,7 @@ export class Room {
           id: bot.id,
           username: bot.username,
           isBot: true,
-          botLevel: bot.botLevel || this.botLevel,
+          botLevel: normalizeBotLevel(bot.botLevel || preferredLevel),
           rankWins: bot.rankWins,
           avatarColor: bot.avatarColor,
           avatarLines: bot.avatarLines,
@@ -347,8 +456,32 @@ export class Room {
     seat.ready = !!ready;
     if (!seat.ready) this.cancelQuickStartTimer();
     this.broadcastLobby();
-    if (seat.ready) this.armQuickStartTimer();
+    if (seat.ready) {
+      this.armQuickStartTimer();
+      void this.autoStartWhenEveryoneReady();
+    }
     return true;
+  }
+
+  async autoStartWhenEveryoneReady() {
+    if (this.readyAutoStartInProgress || this.starting || this.state.phase !== 'lobby') return;
+    const humans = this.seats.filter((s) => s && !s.isBot);
+    if (!humans.length || humans.some((s) => !s.ready)) return;
+    if (this.isPrivate && this.seats.some((s) => !s)) return;
+
+    this.readyAutoStartInProgress = true;
+    try {
+      if (!this.isPrivate && this.seats.some((s) => !s)) {
+        const filled = await this.fillWithBots({ startAfterFill: false });
+        if (!filled?.ok) return;
+      }
+      if (this.state.phase !== 'lobby') return;
+      const liveHumans = this.seats.filter((s) => s && !s.isBot);
+      if (!liveHumans.length || liveHumans.some((s) => !s.ready)) return;
+      await this.startGame();
+    } finally {
+      this.readyAutoStartInProgress = false;
+    }
   }
 
   async requestStart(playerId) {
@@ -360,8 +493,8 @@ export class Room {
     }
     if (!this.isPrivate && this.seats.some((s) => !s)) await this.fillWithBots({ startAfterFill: false });
     const humans = this.seats.filter((s) => s && !s.isBot);
-    if (humans.length && humans.some((s) => !s.ready && s.id !== playerId)) {
-      return { ok: false, error: 'players are not ready' };
+    if (humans.length && humans.some((s) => !s.ready)) {
+      return { ok: false, error: 'all players must be ready' };
     }
     await this.startGame();
     return { ok: this.state.phase === 'playing' };
@@ -422,7 +555,16 @@ export class Room {
       return;
     }
     this.gameState = createGame({
-      players: this.seats.map((s) => ({ id: s.id, username: s.username, isBot: s.isBot, botLevel: s.botLevel })),
+      players: this.seats.map((s) => ({
+        id: s.id,
+        username: s.username,
+        nickname: s.nickname || null,
+        avatar_url: s.avatar_url || null,
+        selected_avatar_frame: s.selected_avatar_frame || null,
+        country_code: s.country_code || null,
+        isBot: s.isBot,
+        botLevel: s.botLevel,
+      })),
       mode: this.mode,
       bluffEnabled: this.bluffEnabled,
       stake: this.stake,
@@ -431,6 +573,7 @@ export class Room {
       throwInMode: this.throwInMode,
       allowDraw: this.allowDraw,
     });
+    this.pendingAction = null;
     this.humanActionStats = new Map(
       this.seats
         .filter((s) => s && !s.isBot)
@@ -516,6 +659,7 @@ export class Room {
    */
   handleTurnTimeout() {
     if (!this.gameState || this.gameState.phase === 'ended') return;
+    if (this.pendingAction) return;
     const idx = this.gameState.phase === 'defending' ? this.gameState.defenderIdx : this.gameState.attackerIdx;
     const player = this.gameState.players[idx];
     if (!player) return;
@@ -569,7 +713,12 @@ export class Room {
 
   runBotAction(idx) {
     if (!this.gameState || this.gameState.phase === 'ended') return;
+    const expectedIdx = this.gameState.phase === 'defending'
+      ? this.gameState.defenderIdx
+      : this.gameState.attackerIdx;
+    if (idx !== expectedIdx) return;
     const player = this.gameState.players[idx];
+    if (!player || !player.isBot) return;
     const decision = botDecide(this.gameState, idx, player.botLevel || 'medium');
     let event = 'game:move';
     let res = { ok: true };
@@ -616,18 +765,158 @@ export class Room {
     this.maybeScheduleBotAction();
   }
 
+  seatedHumanPlayers() {
+    return this.seats.filter((s) => s && !s.isBot);
+  }
+
+  actionApproverFor(playerId) {
+    if (!this.gameState || this.gameState.phase === 'ended') return null;
+    if (this.maxPlayers !== 2) return null;
+    const humans = this.seatedHumanPlayers();
+    if (humans.length !== 2 || humans.some((s) => !s.socketId)) return null;
+    const actor = humans.find((s) => s.id === playerId);
+    if (!actor) return null;
+    const approver = humans.find((s) => s.id !== playerId);
+    if (!approver) return null;
+    return { actor, approver };
+  }
+
+  actionNeedsConfirmation(playerId, action) {
+    if (!CONFIRMABLE_ACTIONS.has(action)) return false;
+    return Boolean(this.actionApproverFor(playerId));
+  }
+
+  previewAction(playerId, action, payload = {}) {
+    if (!this.gameState || typeof structuredClone !== 'function') return { ok: true };
+    try {
+      const clone = structuredClone(this.gameState);
+      return applyEngineAction(clone, playerId, action, payload);
+    } catch (err) {
+      return { ok: false, error: err.message || 'action preview failed' };
+    }
+  }
+
+  pendingActionPayload() {
+    if (!this.pendingAction) return null;
+    return {
+      id: this.pendingAction.id,
+      code: this.code,
+      action: this.pendingAction.action,
+      actionLabel: actionLabel(this.pendingAction.action),
+      payload: this.pendingAction.payload,
+      card: this.pendingAction.payload?.card || null,
+      actorId: this.pendingAction.actorId,
+      actorName: this.pendingAction.actorName,
+      approverId: this.pendingAction.approverId,
+      expiresAt: this.pendingAction.expiresAt,
+    };
+  }
+
+  resumeTurnAfterPending() {
+    if (!this.gameState || this.gameState.phase === 'ended') return;
+    if (this.turnTimer) clearTimeout(this.turnTimer);
+    this.turnDeadline = Date.now() + ACTION_CONFIRM_RESUME_MS;
+    this.turnTimer = setTimeout(() => this.handleTurnTimeout(), ACTION_CONFIRM_RESUME_MS);
+    this.broadcastGameState('game:move');
+  }
+
+  cancelPendingAction(reason = 'Harakat bekor qilindi', { resumeTurn = true } = {}) {
+    const pending = this.pendingAction;
+    if (!pending) return false;
+    const request = this.pendingActionPayload();
+    if (this.pendingActionTimer) {
+      clearTimeout(this.pendingActionTimer);
+      this.pendingActionTimer = null;
+    }
+    this.pendingAction = null;
+    const payload = { ...(request || {}), id: pending.id, code: this.code, reason };
+    this.manager.io.to(`room:${this.code}`).emit('game:action_confirm_cancelled', payload);
+    if (resumeTurn) this.resumeTurnAfterPending();
+    return true;
+  }
+
+  requestAction(playerId, action, payload = {}) {
+    if (!this.actionNeedsConfirmation(playerId, action)) {
+      if (this.pendingAction) return { ok: false, error: 'Raqib tasdig‘i kutilmoqda' };
+      return this.applyAction(playerId, action, payload);
+    }
+    if (this.pendingAction) {
+      if (this.pendingAction.actorId === playerId) {
+        return { ok: true, pending: true, request: this.pendingActionPayload() };
+      }
+      return { ok: false, error: 'Boshqa harakat tasdiq kutyapti' };
+    }
+
+    const preview = this.previewAction(playerId, action, payload);
+    if (!preview?.ok) return preview;
+    const pair = this.actionApproverFor(playerId);
+    if (!pair) return this.applyAction(playerId, action, payload);
+
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+    const now = Date.now();
+    this.pendingAction = {
+      id: uuid(),
+      actorId: pair.actor.id,
+      actorName: pair.actor.username,
+      approverId: pair.approver.id,
+      approverName: pair.approver.username,
+      action,
+      payload: payload || {},
+      createdAt: now,
+      expiresAt: now + ACTION_CONFIRM_TIMEOUT_MS,
+    };
+    this.turnDeadline = this.pendingAction.expiresAt;
+    const request = this.pendingActionPayload();
+    this.manager.io.to(pair.approver.socketId).emit('game:action_confirm_request', request);
+    this.manager.io.to(pair.actor.socketId).emit('game:action_confirm_waiting', request);
+    this.broadcastGameState('game:move');
+    this.pendingActionTimer = setTimeout(() => {
+      this.cancelPendingAction('Tasdiqlash vaqti tugadi');
+    }, ACTION_CONFIRM_TIMEOUT_MS);
+    return { ok: true, pending: true, request };
+  }
+
+  confirmPendingAction(playerId, requestId, accept) {
+    const pending = this.pendingAction;
+    if (!pending) return { ok: false, error: 'Tasdiqlash uchun harakat yo‘q' };
+    if (pending.id !== requestId) return { ok: false, error: 'Eski tasdiq so‘rovi' };
+    if (pending.approverId !== playerId) return { ok: false, error: 'Faqat raqib tasdiqlaydi' };
+    if (Date.now() > pending.expiresAt) {
+      this.cancelPendingAction('Tasdiqlash vaqti tugadi');
+      return { ok: false, error: 'Tasdiqlash vaqti tugadi' };
+    }
+    if (this.pendingActionTimer) {
+      clearTimeout(this.pendingActionTimer);
+      this.pendingActionTimer = null;
+    }
+    this.pendingAction = null;
+    if (!accept) {
+      this.manager.io.to(`room:${this.code}`).emit('game:action_confirm_rejected', {
+        id: pending.id,
+        code: this.code,
+        actorId: pending.actorId,
+        approverId: pending.approverId,
+        reason: 'Raqib rad etdi',
+      });
+      this.resumeTurnAfterPending();
+      return { ok: true, rejected: true };
+    }
+    this.manager.io.to(`room:${this.code}`).emit('game:action_confirmed', {
+      id: pending.id,
+      code: this.code,
+      actorId: pending.actorId,
+      approverId: pending.approverId,
+      action: pending.action,
+    });
+    return this.applyAction(pending.actorId, pending.action, pending.payload);
+  }
+
   applyAction(playerId, action, payload) {
     if (!this.gameState || this.gameState.phase === 'ended') return { ok: false, error: 'no game' };
-    let res;
-    switch (action) {
-      case 'attack': res = playAttack(this.gameState, playerId, payload?.card, { bluff: !!payload?.bluff, claimedRank: payload?.claimedRank }); break;
-      case 'defense': res = playDefense(this.gameState, playerId, payload?.card); break;
-      case 'transfer': res = transferAttack(this.gameState, playerId, payload?.card); break;
-      case 'take': res = takeCards(this.gameState, playerId); break;
-      case 'pass': res = passAttack(this.gameState, playerId); break;
-      case 'challenge': res = challengeBluff(this.gameState, playerId, payload?.tableIdx); break;
-      default: return { ok: false, error: 'unknown action' };
-    }
+    let res = applyEngineAction(this.gameState, playerId, action, payload);
     if (!res.ok) return res;
     const actorStats = this.humanActionStats.get(playerId);
     if (actorStats) {
@@ -666,7 +955,7 @@ export class Room {
       case 'defense':
         // When the defender beats the final unbeaten card, surface
         // "defended" so the bubble matches the visible state.
-        kind = this.gameState?.table?.every?.((t) => t.defense) ? 'defended' : 'attack';
+        kind = this.gameState?.table?.every?.((t) => t.defense) ? 'defended' : 'defense';
         break;
       case 'take':
         kind = 'take';
@@ -686,10 +975,19 @@ export class Room {
     // forfeitPlayer + handleTurnTimeout bir vaqtda async zanjir yaratishi mumkin.
     if (this._finishing) return;
     this._finishing = true;
+    this.cancelPendingAction('O‘yin tugadi', { resumeTurn: false });
 
     if (this.turnTimer) { clearTimeout(this.turnTimer); this.turnTimer = null; }
     if (this.botActionTimer) { clearTimeout(this.botActionTimer); this.botActionTimer = null; }
     if (this.snapshotTimer) { clearInterval(this.snapshotTimer); this.snapshotTimer = null; }
+    if (this.voicePendingTimer) { clearTimeout(this.voicePendingTimer); this.voicePendingTimer = null; }
+    this.voicePending = null;
+    try {
+      const endedVoice = await endVoiceSession(this.code);
+      if (endedVoice) this.manager.io.to(`room:${this.code}`).emit('voice:end', { code: this.code, reason: 'game-ended' });
+    } catch (e) {
+      logger.warn('voice session cleanup failed', e.message);
+    }
     this.state.phase = 'ended';
 
     const winners = this.gameState.winnerOrder; // ids in order they emptied hand
@@ -701,7 +999,7 @@ export class Room {
     const allPlayers = this.gameState.players; // includes bots
     const stake = this.stake;
     const firstWinnerId = winners[0];
-    const pot = stake * allPlayers.length;
+    const pot = stake * allHumans.length;
     const payoutShares = [];
     this.gameState.pot = pot;
     this.gameState.payoutShares = payoutShares;
@@ -720,9 +1018,8 @@ export class Room {
       // (Stakeni chargeHumanStakes() startGame() ichida allaqachon olgan,
       //  bu yerda qayta olish kerak emas — Bug 5/6 fix: bo'sh loop o'chirildi)
 
-      // TOR §3: pot = stake × total seats (humans + bots).
-      // Bot seats contribute a virtual stake so the winner receives the same
-      // payout regardless of how many human-filled seats there are.
+      // Pot is funded only by real human players. Bot seats never mint a
+      // virtual stake, so payouts cannot create extra coins.
       const winnerHumans = allPlayers.filter((p) => !p.isBot && p.id !== forfeitedPlayerId && winners.includes(p.id));
       if (isDraw) {
         for (const id of this.stakeChargedHumanIds) {
@@ -873,6 +1170,17 @@ export class Room {
         ]
       );
       await syncManyUserGameStats(allHumans.map((p) => p.id));
+      for (const bot of allPlayers.filter((p) => p.isBot)) {
+        const botWon = winners.includes(bot.id) && durakId !== bot.id;
+        const emoji = botEmojiFor(botWon ? 'win' : 'lose');
+        if (emoji) {
+          this.manager.io.to(`room:${this.code}`).emit('emoji:react', {
+            playerId: bot.id,
+            emoji,
+            ts: Date.now(),
+          });
+        }
+      }
       if (!isDraw && this.tournamentMatch?.matchId) {
         await this.resolveTournamentMatch(firstWinnerId, durakId);
       }
@@ -920,7 +1228,7 @@ export class Room {
          VALUES ('info', 'game_end', $1, $2)`,
         [
           isDraw ? `Draw at table ${this.code}` : `Game ended at table ${this.code}`,
-          { code: this.code, stake, winnerId: firstWinnerId, durakId, isDraw, pot: stake * allPlayers.length },
+          { code: this.code, stake, winnerId: firstWinnerId, durakId, isDraw, pot },
         ]
       );
     } catch (_) { /* non-fatal */ }
@@ -977,6 +1285,10 @@ export class Room {
       seats: this.seats.map((s) => s ? {
         id: s.id,
         username: s.username,
+        nickname: s.nickname || null,
+        avatar_url: s.avatar_url || null,
+        selected_avatar_frame: s.selected_avatar_frame || null,
+        country_code: s.country_code || null,
         ready: s.ready,
         avatarColor: s.avatarColor,
         avatarLines: s.avatarLines,
@@ -989,6 +1301,7 @@ export class Room {
   }
 
   broadcastLobby() {
+    this.manager.invalidatePublicListCache();
     this.manager.io.to(`room:${this.code}`).emit('room:state', this.lobbySnapshot());
     this.manager.broadcastPublicList();
   }
@@ -1056,6 +1369,10 @@ export class Room {
     if (this.botFillTimer) clearTimeout(this.botFillTimer);
     if (this.quickStartTimer) clearTimeout(this.quickStartTimer);
     if (this.snapshotTimer) clearInterval(this.snapshotTimer);
+    if (this.pendingActionTimer) clearTimeout(this.pendingActionTimer);
+    for (const timer of this.botTypingTimers) clearTimeout(timer);
+    this.botTypingTimers = [];
+    this.pendingAction = null;
     this.spectators.clear();
     // Return any seated bots to the global pool.
     // Bug 7 fix: `startsWith('bot-')` faqat fallback botlarga to'g'ri keladi.

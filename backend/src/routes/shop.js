@@ -126,8 +126,15 @@ shopRouter.post('/buy/emoji-pack', authRequired, async (req, res, next) => {
     await withTransaction(async (client) => {
       const lock = await client.query('SELECT gold_coins FROM users WHERE id = $1 FOR UPDATE', [req.user.id]);
       const owned = await client.query(
-        `SELECT 1 FROM inventory WHERE user_id = $1 AND item_type = 'emoji' AND item_id LIKE $2 LIMIT 1`,
-        [req.user.id, `${pack.id}:%`]
+        `SELECT 1
+           FROM inventory
+          WHERE user_id = $1
+            AND (
+              (item_type = 'emoji_pack' AND item_id = $2)
+              OR (item_type = 'emoji' AND item_id LIKE $3)
+            )
+          LIMIT 1`,
+        [req.user.id, pack.id, `${pack.id}:%`]
       );
       if (owned.rows[0]) {
         alreadyOwned = true;

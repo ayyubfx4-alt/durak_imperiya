@@ -1,7 +1,6 @@
 // TOR §6 — donation tracking with the required fake donation pool.
 import { withTransaction, query } from '../db.js';
 import { logger } from '../logger.js';
-import { config } from '../config.js';
 
 async function dbReachable() {
   try { await query('SELECT 1'); return true; } catch (_) { return false; }
@@ -27,10 +26,10 @@ function fakeDonationRow(index) {
 }
 
 export async function ensureFakeDonationsSeeded() {
-  if (config.env === 'production' || process.env.ENABLE_FAKE_DONATIONS !== '1') return;
+  if (process.env.DISABLE_FAKE_DONATIONS === '1') return;
   if (!(await dbReachable())) return;
   try {
-    const count = await query('SELECT COUNT(*)::int AS count FROM donations WHERE is_fake = TRUE');
+    const count = await query('SELECT COUNT(*)::int AS count FROM donations');
     const missing = Math.max(0, 100 - Number(count.rows[0]?.count || 0));
     for (let i = 0; i < missing; i++) {
       const row = fakeDonationRow(i);
@@ -58,12 +57,15 @@ export async function recordDonation({ userId, displayName, amountUsdCents, mess
     const ins = await client.query(
       `INSERT INTO donations (user_id, display_name, amount_usd_cents, message, is_fake, payment_ref)
        VALUES ($1, $2, $3, $4, FALSE, $5)
-       RETURNING id, display_name, amount_usd_cents, message, created_at`,
-      [userId, displayName, amountUsdCents, message || null, paymentRef || null]
+       RETURNING id, user_id, display_name, amount_usd_cents, message, is_fake, created_at`,
+      [userId || null, displayName, amountUsdCents, message || null, paymentRef || null]
     );
     if (userId) {
       await client.query(
-        `UPDATE users SET total_donated_cents = total_donated_cents + $1 WHERE id = $2`,
+        `UPDATE users
+            SET total_donated_cents = COALESCE(total_donated_cents, 0) + $1,
+                updated_at = now()
+          WHERE id = $2`,
         [amountUsdCents, userId]
       );
     }
@@ -80,14 +82,14 @@ export async function recordDonation({ userId, displayName, amountUsdCents, mess
   });
 }
 
-export async function topDonors(limit = 100, { includeFake = false } = {}) {
+export async function topDonors(limit = 100, { includeFake = true } = {}) {
   const cap = Math.max(1, Math.min(200, Math.floor(limit)));
   const where = includeFake ? '' : 'WHERE is_fake = FALSE';
   const r = await query(
     `SELECT id, user_id, display_name, amount_usd_cents, message, is_fake, created_at
        FROM donations
       ${where}
-      ORDER BY amount_usd_cents DESC, created_at DESC
+      ORDER BY is_fake ASC, amount_usd_cents DESC, created_at DESC
       LIMIT $1`,
     [cap]
   );

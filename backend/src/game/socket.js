@@ -19,6 +19,7 @@ import {
 } from './socketGuards.js';
 import { canUseVoice, startVoiceSession, endVoiceSession, getActiveVoiceSession } from '../services/voiceChat.js';
 import { pushGameInvite } from '../services/push.js';
+import { validateSocketPayload } from '../middleware/validate.js';
 
 // Per-user premium cache (60 s TTL).
 const PREMIUM_CACHE_TTL_MS = 60_000;
@@ -87,6 +88,10 @@ export function isUserOnline(userId) {
   return Boolean(userSockets.get(String(userId))?.size);
 }
 
+export function socketIdsForUser(userId) {
+  return [...(userSockets.get(String(userId)) || [])];
+}
+
 function cleanNickname(value) {
   return String(value || '').trim().replace(/^@+/, '').slice(0, 24);
 }
@@ -112,9 +117,11 @@ export async function flushAchievementInbox(io, userId) {
 export async function setupSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: { origin: config.corsOrigins, credentials: false },
-    pingTimeout: 30000,
-    // Allow polling fallback for low-bandwidth networks but prefer WebSocket.
-    transports: ['websocket', 'polling'],
+    pingInterval: 10_000,
+    pingTimeout: 15_000,
+    // Mobile WebViews connect more reliably via polling, then upgrade.
+    transports: ['polling', 'websocket'],
+    upgrade: true,
   });
 
   // PRO: attach Redis adapter for multi-instance scaling. No-op if
@@ -133,8 +140,8 @@ export async function setupSocket(httpServer) {
             SET last_ip = COALESCE(NULLIF($2, ''), last_ip),
                 device_id = COALESCE(NULLIF($3, ''), device_id)
           WHERE id = $1
-          RETURNING id, username, nickname, coins, is_banned, is_muted, muted_until, muted_reason,
-                    games_played, premium_until, last_ip, device_id, is_bot`,
+          RETURNING id, username, nickname, avatar_url, selected_avatar_frame, coins, is_banned, is_muted, muted_until, muted_reason,
+                    games_played, games_won, rank_wins, premium_until, last_ip, device_id, country_code, is_bot`,
         [payload.uid, ip, deviceId]
       );
       if (!r.rows[0] || r.rows[0].is_banned) return next(new Error('forbidden'));
@@ -168,6 +175,8 @@ export async function setupSocket(httpServer) {
     setPresence(socket.user.id, { username: socket.user.username, socketId: socket.id }).catch(() => {});
     socket._lastAction = 0;
     socket._packetRate = { windowStart: Date.now(), count: 0 };
+    socket._roomCodes = new Set();
+    socket._spectatorRoomCodes = new Set();
 
     socket.use((packet, next) => {
       const eventName = String(packet?.[0] || '');
@@ -217,6 +226,7 @@ export async function setupSocket(httpServer) {
       const liveRoom = match.rows[0]?.room_code ? manager.get(match.rows[0].room_code) : null;
       if (liveRoom?.gameState) {
         socket.join(`room:${liveRoom.code}:spectators`);
+        socket._spectatorRoomCodes.add(liveRoom.code);
         liveRoom.addSpectator(socket.id, { userId: socket.user.id, tournamentId: tid, matchId: mid });
       }
       const size = io.sockets.adapter.rooms.get(roomName)?.size || 0;
@@ -236,7 +246,10 @@ export async function setupSocket(httpServer) {
         [mid, tid]
       ).catch(() => ({ rows: [] }));
       const liveRoom = match.rows[0]?.room_code ? manager.get(match.rows[0].room_code) : null;
-      if (liveRoom) liveRoom.removeSpectator(socket.id);
+      if (liveRoom) {
+        liveRoom.removeSpectator(socket.id);
+        socket._spectatorRoomCodes.delete(liveRoom.code);
+      }
       const size = io.sockets.adapter.rooms.get(roomName)?.size || 0;
       await query('UPDATE tournament_matches SET viewer_count = $1 WHERE id = $2 AND tournament_id = $3', [size, mid, tid]).catch(() => {});
       io.to(`tournament:${tid}`).emit('tournament:match_viewers', { tournamentId: tid, matchId: mid, viewers: size });
@@ -269,9 +282,13 @@ export async function setupSocket(httpServer) {
 
     socket.on('room:create', async (opts = {}, cb) => {
       try {
-        const stake = Math.max(config.game.minBet, Number(opts.stake) || config.game.minBet);
-        const requestedSize = normalizeAllowedTableSize(opts.maxPlayers, 2);
-        const isPrivate = !!opts.isPrivate;
+        // S4: Validate all create-room options.
+        const v = validateSocketPayload('room:create', opts);
+        if (!v.ok) return cb?.({ ok: false, error: v.error });
+
+        const stake = Math.max(config.game.minBet, Number(v.data.stake) || config.game.minBet);
+        const requestedSize = normalizeAllowedTableSize(v.data.maxPlayers, 2);
+        const isPrivate = !!v.data.isPrivate;
         const password = String(opts.password || '').trim().slice(0, 24);
         if (isPrivate && password.length < 3) {
           return cb?.({ ok: false, error: 'private password required' });
@@ -281,8 +298,8 @@ export async function setupSocket(httpServer) {
         const room = manager.createRoom({
           maxPlayers: requestedSize,
           stake,
-          bluffEnabled: !!opts.bluffEnabled,
-          mode: opts.mode || 'classic',
+          bluffEnabled: !!v.data.bluffEnabled,
+          mode: v.data.mode || 'classic',
           isPrivate,
           password,
           deckSize: opts.deckSize,
@@ -291,14 +308,35 @@ export async function setupSocket(httpServer) {
           throwInMode: opts.throwInMode,
           allowDraw: opts.allowDraw !== false,
           botLevel: opts.botLevel || 'medium',
-          host: { id: socket.user.id, username: socket.user.username },
+          host: {
+            id: socket.user.id,
+            username: socket.user.username,
+            nickname: socket.user.nickname,
+            avatar_url: socket.user.avatar_url,
+            country_code: socket.user.country_code,
+          },
         });
         const r = room.join(
-          { id: socket.user.id, username: socket.user.username, isBot: false, socketId: socket.id, ip: socket.clientInfo?.ip, deviceId: socket.clientInfo?.deviceId },
+          {
+            id: socket.user.id,
+            username: socket.user.username,
+            nickname: socket.user.nickname,
+            avatar_url: socket.user.avatar_url,
+            selected_avatar_frame: socket.user.selected_avatar_frame,
+            country_code: socket.user.country_code,
+            isBot: false,
+            socketId: socket.id,
+            ip: socket.clientInfo?.ip,
+            deviceId: socket.clientInfo?.deviceId,
+            rankWins: Number(socket.user.rank_wins || socket.user.games_won || 0),
+          },
           room.password
         );
         if (!r.ok) manager.destroy(room.code);
-        if (r.ok) socket.join(`room:${room.code}`);
+        if (r.ok) {
+          socket.join(`room:${room.code}`);
+          socket._roomCodes.add(room.code);
+        }
         cb?.({ ok: r.ok, code: room.code, error: r.error });
         if (r.ok) {
           room.broadcastLobby();
@@ -321,9 +359,15 @@ export async function setupSocket(httpServer) {
         const existingSeat = room.seats.find((s) => s && s.id === socket.user.id);
         if (existingSeat) {
           existingSeat.socketId = socket.id;
+          existingSeat.username = socket.user.username || existingSeat.username;
+          existingSeat.nickname = socket.user.nickname || existingSeat.nickname;
+          existingSeat.avatar_url = socket.user.avatar_url || existingSeat.avatar_url;
+          existingSeat.selected_avatar_frame = socket.user.selected_avatar_frame || existingSeat.selected_avatar_frame;
+          existingSeat.country_code = socket.user.country_code || existingSeat.country_code;
           existingSeat.ip = socket.clientInfo?.ip || existingSeat.ip;
           existingSeat.deviceId = socket.clientInfo?.deviceId || existingSeat.deviceId;
           socket.join(`room:${room.code}`);
+          socket._roomCodes.add(room.code);
           const gameView = room.viewForPlayer(socket.user.id);
           socket.emit('game:start', gameView);
           cb?.({ ok: true, reconnected: true, view: gameView });
@@ -339,8 +383,23 @@ export async function setupSocket(httpServer) {
         logger.warn('coin read failed for room:join', e.message);
         return cb?.({ ok: false, error: 'balance check failed' });
       }
-      const r = room.join({ id: socket.user.id, username: socket.user.username, isBot: false, socketId: socket.id, ip: socket.clientInfo?.ip, deviceId: socket.clientInfo?.deviceId }, safePassword);
-      if (r.ok) socket.join(`room:${room.code}`);
+      const r = room.join({
+        id: socket.user.id,
+        username: socket.user.username,
+        nickname: socket.user.nickname,
+        avatar_url: socket.user.avatar_url,
+        selected_avatar_frame: socket.user.selected_avatar_frame,
+        country_code: socket.user.country_code,
+        isBot: false,
+        socketId: socket.id,
+        ip: socket.clientInfo?.ip,
+        deviceId: socket.clientInfo?.deviceId,
+        rankWins: Number(socket.user.rank_wins || socket.user.games_won || 0),
+      }, safePassword);
+      if (r.ok) {
+        socket.join(`room:${room.code}`);
+        socket._roomCodes.add(room.code);
+      }
       registerRoom(room.code, lobbySnap(room)).catch(() => {});
       cb?.(r);
       if (r.ok) socket.emit('room:state', room.lobbySnapshot());
@@ -350,6 +409,7 @@ export async function setupSocket(httpServer) {
       const room = manager.get(code);
       if (!room) return;
       socket.leave(`room:${room.code}`);
+      socket._roomCodes.delete(room.code);
       room.leave(socket.user.id);
       if (!room.seats.some(Boolean)) unregisterRoom(room.code).catch(() => {});
     });
@@ -486,15 +546,40 @@ export async function setupSocket(httpServer) {
       }
     });
 
-    socket.on('game:action', ({ code, action, payload }, cb) => {
+    socket.on('game:action', (rawPayload, cb) => {
+      // S4: Validate payload — prevents malformed card IDs, unknown actions,
+      // oversized room codes, and other injection vectors.
+      const validation = validateSocketPayload('game:action', rawPayload);
+      if (!validation.ok) {
+        return cb?.({ ok: false, error: validation.error });
+      }
+      const { code, action, payload } = validation.data;
+
       const actionLimit = checkGameActionRateLimit(socket);
       if (!actionLimit.ok) return cb?.(actionLimit);
       const room = manager.get(code);
       if (!room) return cb?.({ ok: false, error: 'room not found' });
-      const r = room.applyAction(socket.user.id, action, payload || {});
+      const r = room.requestAction(socket.user.id, action, payload || {});
       cb?.(r);
       // After every action, re-attempt achievement flush for everyone at
       // the table — checkAndUnlock writes the inbox in room.finishGame.
+      if (room.state.phase === 'ended') {
+        for (const seat of room.seats) {
+          if (seat && !seat.isBot) flushAchievementInbox(io, seat.id).catch(() => {});
+        }
+      }
+    });
+
+    socket.on('game:action_confirm', ({ code, requestId, accept } = {}, cb) => {
+      const safeCode = String(code || '').trim().toUpperCase();
+      const safeRequestId = String(requestId || '').trim();
+      if (!/^[A-Z0-9]{4,16}$/i.test(safeCode) || !safeRequestId) {
+        return cb?.({ ok: false, error: 'invalid confirm request' });
+      }
+      const room = manager.get(safeCode);
+      if (!room) return cb?.({ ok: false, error: 'room not found' });
+      const r = room.confirmPendingAction(socket.user.id, safeRequestId, accept !== false);
+      cb?.(r);
       if (room.state.phase === 'ended') {
         for (const seat of room.seats) {
           if (seat && !seat.isBot) flushAchievementInbox(io, seat.id).catch(() => {});
@@ -540,6 +625,8 @@ export async function setupSocket(httpServer) {
     });
 
     socket.on('chat:message', async ({ code, content, type }, cb) => {
+      // S4: Trim and length-cap message content before any other processing.
+      const safeContent = String(content || '').trim().slice(0, 500);
       const room = manager.get(code);
       if (!room) return cb?.({ ok: false, error: 'room not found' });
       const seat = room.seats.find((s) => s && s.id === socket.user.id);
@@ -554,9 +641,9 @@ export async function setupSocket(httpServer) {
         return cb?.({ ok: false, error: "Media chat faqat 1 ga 1 o'yinda ishlaydi." });
       }
       if ((t === 'image' || t === 'video') && !isPremium) return cb?.({ ok: false, error: 'media chat is premium-only' });
-      if (t === 'text' && (!content || String(content).length > 500)) return cb?.({ ok: false, error: 'invalid text' });
+      if (t === 'text' && (!safeContent || safeContent.length === 0)) return cb?.({ ok: false, error: 'message cannot be empty' });
       if (t === 'emoji') {
-        const packId = String(content || '').split(':')[0];
+        const packId = String(safeContent || '').split(':')[0];
         const premiumPack = PREMIUM_EMOJI_PACK_IDS.has(packId);
         if (premiumPack && !isPremium) return cb?.({ ok: false, error: 'this emoji pack is premium-only' });
       }
@@ -594,35 +681,105 @@ export async function setupSocket(httpServer) {
     // Feature 30: Ovozli chat — WebRTC signaling relay
     // Faqat 1v1 o'yinda, 10 o'yindan keyin, tasdiq kerak
     // ─────────────────────────────────────────────────────────────────
-    async function validateVoiceRoom(code, userId) {
-      const room = manager.get(code);
+    const VOICE_REQUEST_TTL_MS = 60_000;
+
+    function parseVoicePayload(eventName, rawPayload, cb) {
+      const parsed = validateSocketPayload(eventName, rawPayload);
+      if (!parsed.ok) {
+        cb?.({ ok: false, error: parsed.error });
+        socket.emit('voice:error', { error: parsed.error });
+        return null;
+      }
+      return parsed.data;
+    }
+
+    function clearVoicePending(room) {
+      if (!room) return;
+      if (room.voicePendingTimer) clearTimeout(room.voicePendingTimer);
+      room.voicePendingTimer = null;
+      room.voicePending = null;
+    }
+
+    function scheduleVoicePendingExpiry(room, pending) {
+      if (room.voicePendingTimer) clearTimeout(room.voicePendingTimer);
+      room.voicePendingTimer = setTimeout(() => {
+        const current = room.voicePending;
+        if (!current || current.at !== pending.at || current.fromId !== pending.fromId) return;
+        clearVoicePending(room);
+        io.to(pending.fromSocketId).emit('voice:timeout', { code: pending.code });
+        io.to(pending.toSocketId).emit('voice:timeout', { code: pending.code });
+      }, VOICE_REQUEST_TTL_MS);
+    }
+
+    function pendingMatches(pending, fromId, toId) {
+      return !!pending
+        && String(pending.fromId) === String(fromId)
+        && String(pending.toId) === String(toId)
+        && Date.now() - Number(pending.at || 0) <= VOICE_REQUEST_TTL_MS;
+    }
+
+    async function validateVoiceRoom(code, userId, opts = {}) {
+      const safeCode = String(code || '').trim().toUpperCase();
+      const room = manager.get(safeCode);
       if (!room) return { ok: false, error: 'room not found' };
-      const mute = activeMute(socket.user);
-      if (mute) return { ok: false, error: mute.reason, mutedUntil: mute.mutedUntil };
+      if (opts.checkMute !== false) {
+        const mute = activeMute(socket.user);
+        if (mute) return { ok: false, error: mute.reason, mutedUntil: mute.mutedUntil };
+      }
       const players = room.seats.filter((s) => s && !s.isBot);
       if (room.maxPlayers !== 2 || players.length !== 2) {
         return { ok: false, error: "Ovozli chat faqat 2 ta haqiqiy o'yinchi bo'lgan 1 ga 1 o'yinda ishlaydi." };
       }
-      const me = players.find((p) => p.id === userId);
-      const other = players.find((p) => p.id !== userId);
+      const me = players.find((p) => String(p.id) === String(userId));
+      const other = players.find((p) => String(p.id) !== String(userId));
       if (!me || !other?.socketId) return { ok: false, error: 'player not available' };
-      const allowed = await canUseVoice(userId, await isUserPremium(userId));
-      if (!allowed.allowed) return { ok: false, error: allowed.reason || 'voice unavailable' };
-      return { ok: true, room, me, other };
+      if (opts.requireEligibility !== false) {
+        const allowed = await canUseVoice(userId, await isUserPremium(userId));
+        if (!allowed.allowed) return { ok: false, error: allowed.reason || 'voice unavailable' };
+      }
+      let session = null;
+      if (opts.requireActiveSession) {
+        session = await getActiveVoiceSession(safeCode);
+        if (!session) return { ok: false, error: 'voice session not active' };
+        const sessionUsers = new Set([String(session.user_a), String(session.user_b)]);
+        if (!sessionUsers.has(String(me.id)) || !sessionUsers.has(String(other.id))) {
+          return { ok: false, error: 'voice session mismatch' };
+        }
+      }
+      return { ok: true, code: safeCode, room, me, other, session };
     }
 
-    socket.on('voice:request', async ({ code } = {}, cb) => {
+    socket.on('voice:request', async (rawPayload = {}, cb) => {
       try {
-        const v = await validateVoiceRoom(code, socket.user.id);
+        const data = parseVoicePayload('voice:request', rawPayload, cb);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id);
         if (!v.ok) {
-          socket.emit('voice:error', { code, error: v.error });
+          socket.emit('voice:error', { code: data.code, error: v.error });
           return cb?.({ ok: false, error: v.error });
         }
-        v.room.voicePending = { fromId: socket.user.id, toId: v.other.id, at: Date.now() };
+        if (await getActiveVoiceSession(v.code)) {
+          return cb?.({ ok: false, error: 'voice session already active' });
+        }
+        if (v.room.voicePending && Date.now() - Number(v.room.voicePending.at || 0) <= VOICE_REQUEST_TTL_MS) {
+          return cb?.({ ok: false, error: 'voice request already pending' });
+        }
+        clearVoicePending(v.room);
+        const pending = {
+          code: v.code,
+          fromId: String(socket.user.id),
+          toId: String(v.other.id),
+          fromSocketId: socket.id,
+          toSocketId: v.other.socketId,
+          at: Date.now(),
+        };
+        v.room.voicePending = pending;
+        scheduleVoicePendingExpiry(v.room, pending);
         io.to(v.other.socketId).emit('voice:request', {
           fromId: socket.user.id,
           fromName: socket.user.username,
-          code,
+          code: v.code,
+          timeoutMs: VOICE_REQUEST_TTL_MS,
         });
         cb?.({ ok: true });
       } catch (err) {
@@ -630,62 +787,96 @@ export async function setupSocket(httpServer) {
       }
     });
 
-    socket.on('voice:accept', async ({ code } = {}, cb) => {
+    socket.on('voice:accept', async (rawPayload = {}, cb) => {
       try {
-        const v = await validateVoiceRoom(code, socket.user.id);
+        const data = parseVoicePayload('voice:accept', rawPayload, cb);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id);
         if (!v.ok) {
-          socket.emit('voice:error', { code, error: v.error });
+          socket.emit('voice:error', { code: data.code, error: v.error });
           return cb?.({ ok: false, error: v.error });
         }
         const pending = v.room.voicePending;
-        if (!pending || pending.toId !== socket.user.id || pending.fromId !== v.other.id || Date.now() - pending.at > 60_000) {
+        if (!pendingMatches(pending, v.other.id, socket.user.id)) {
+          clearVoicePending(v.room);
           return cb?.({ ok: false, error: 'voice request expired' });
         }
         const otherAllowed = await canUseVoice(v.other.id, await isUserPremium(v.other.id));
         if (!otherAllowed.allowed) return cb?.({ ok: false, error: otherAllowed.reason || 'voice unavailable' });
-        await startVoiceSession(code, pending.fromId, socket.user.id);
-        v.room.voicePending = null;
-        io.to(v.other.socketId).emit('voice:accept', { code });
+        await startVoiceSession(v.code, pending.fromId, socket.user.id);
+        clearVoicePending(v.room);
+        io.to(v.other.socketId).emit('voice:accept', { code: v.code });
         cb?.({ ok: true });
       } catch (err) {
         cb?.({ ok: false, error: err.message });
       }
     });
 
-    socket.on('voice:offer', async ({ code, offer }) => {
-      const room = manager.get(code);
-      if (!room) return;
-      if (!await getActiveVoiceSession(code)) return;
-      const players = room.seats.filter(s => s && !s.isBot);
-      const other = players.find(p => p.id !== socket.user.id);
-      if (!other?.socketId) return;
-      io.to(other.socketId).emit('voice:offer', { offer, code });
+    socket.on('voice:reject', async (rawPayload = {}, cb) => {
+      try {
+        const data = parseVoicePayload('voice:reject', rawPayload, cb);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id, { requireEligibility: false, checkMute: false });
+        if (!v.ok) return cb?.({ ok: false, error: v.error });
+        const pending = v.room.voicePending;
+        if (!pendingMatches(pending, v.other.id, socket.user.id)) {
+          clearVoicePending(v.room);
+          return cb?.({ ok: false, error: 'voice request expired' });
+        }
+        clearVoicePending(v.room);
+        io.to(v.other.socketId).emit('voice:reject', { code: v.code });
+        cb?.({ ok: true });
+      } catch (err) {
+        cb?.({ ok: false, error: err.message });
+      }
     });
 
-    socket.on('voice:answer', async ({ code, answer }) => {
-      const room = manager.get(code);
-      if (!room) return;
-      if (!await getActiveVoiceSession(code)) return;
-      const players = room.seats.filter(s => s && !s.isBot);
-      const other = players.find(p => p.id !== socket.user.id);
-      if (!other?.socketId) return;
-      io.to(other.socketId).emit('voice:answer', { answer, code });
+    socket.on('voice:offer', async (rawPayload = {}) => {
+      try {
+        const data = parseVoicePayload('voice:offer', rawPayload);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id, { requireEligibility: false, requireActiveSession: true });
+        if (!v.ok) return socket.emit('voice:error', { code: data.code, error: v.error });
+        io.to(v.other.socketId).emit('voice:offer', { offer: data.offer, code: v.code });
+      } catch (err) {
+        socket.emit('voice:error', { error: err.message || 'voice offer failed' });
+      }
     });
 
-    socket.on('voice:ice', async ({ code, candidate }) => {
-      const room = manager.get(code);
-      if (!room) return;
-      if (!await getActiveVoiceSession(code)) return;
-      const players = room.seats.filter(s => s && !s.isBot);
-      const other = players.find(p => p.id !== socket.user.id);
-      if (!other?.socketId) return;
-      io.to(other.socketId).emit('voice:ice', { candidate, code });
+    socket.on('voice:answer', async (rawPayload = {}) => {
+      try {
+        const data = parseVoicePayload('voice:answer', rawPayload);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id, { requireEligibility: false, requireActiveSession: true });
+        if (!v.ok) return socket.emit('voice:error', { code: data.code, error: v.error });
+        io.to(v.other.socketId).emit('voice:answer', { answer: data.answer, code: v.code });
+      } catch (err) {
+        socket.emit('voice:error', { error: err.message || 'voice answer failed' });
+      }
+    });
+
+    socket.on('voice:ice', async (rawPayload = {}) => {
+      try {
+        const data = parseVoicePayload('voice:ice', rawPayload);
+        if (!data) return;
+        const v = await validateVoiceRoom(data.code, socket.user.id, { requireEligibility: false, requireActiveSession: true });
+        if (!v.ok) return socket.emit('voice:error', { code: data.code, error: v.error });
+        io.to(v.other.socketId).emit('voice:ice', { candidate: data.candidate, code: v.code });
+      } catch (err) {
+        socket.emit('voice:error', { error: err.message || 'voice ice failed' });
+      }
     });
 
     // Istalgan tomon o'chirsa — ikkala tomonda o'chadi (Feature 30)
-    socket.on('voice:end', async ({ code }) => {
-      await endVoiceSession(code).catch(() => {});
-      io.to(`room:${code}`).emit('voice:end', { code });
+    socket.on('voice:end', async (rawPayload = {}, cb) => {
+      const data = parseVoicePayload('voice:end', rawPayload, cb);
+      if (!data) return;
+      const v = await validateVoiceRoom(data.code, socket.user.id, { requireEligibility: false, checkMute: false });
+      if (!v.ok) return cb?.({ ok: false, error: v.error });
+      clearVoicePending(v.room);
+      await endVoiceSession(v.code).catch(() => {});
+      io.to(`room:${v.code}`).emit('voice:end', { code: v.code, reason: data.reason || 'ended' });
+      cb?.({ ok: true });
     });
 
     socket.on('disconnect', async () => {
@@ -700,10 +891,26 @@ export async function setupSocket(httpServer) {
       if (!userSockets.has(socket.user.id)) {
         clearPresence(socket.user.id).catch(() => {});
       }
-      for (const room of manager.rooms.values()) {
-        room.removeSpectator?.(socket.id);
+      const knownCodes = new Set([
+        ...Array.from(socket._roomCodes || []),
+        ...Array.from(socket._spectatorRoomCodes || []),
+      ]);
+      const roomsToCheck = knownCodes.size
+        ? Array.from(knownCodes, (code) => manager.get(code)).filter(Boolean)
+        : Array.from(manager.rooms.values());
+      for (const room of roomsToCheck) {
+        if (!knownCodes.size || socket._spectatorRoomCodes?.has(room.code)) {
+          room.removeSpectator?.(socket.id);
+          socket._spectatorRoomCodes?.delete(room.code);
+        }
         const seat = room.seats.find((s) => s && s.id === socket.user.id);
         if (!seat) continue;
+        const hadPendingVoice = !!room.voicePending;
+        const endedVoice = await endVoiceSession(room.code).catch(() => null);
+        clearVoicePending(room);
+        if (hadPendingVoice || endedVoice) {
+          io.to(`room:${room.code}`).emit('voice:end', { code: room.code, reason: 'disconnect' });
+        }
         if (room.state.phase === 'playing') {
           // Bug 1 fix: O'yin paytida disconnect → socketId=null qilinadi.
           // Forfeit qilish uchun turn timer ishlatiladi (handleTurnTimeout).
@@ -713,6 +920,7 @@ export async function setupSocket(httpServer) {
           // Lobby yoki ended fazada — odatdagidek chiqariladi.
           room.leave(socket.user.id);
         }
+        socket._roomCodes?.delete(room.code);
       }
     });
   });

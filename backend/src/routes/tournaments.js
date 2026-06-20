@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authRequired } from '../middleware/auth.js';
+import { authRequired, adminRequired, adminPermission } from '../middleware/auth.js';
 import { query, withTransaction } from '../db.js';
 import { config } from '../config.js';
 import { HttpError } from '../middleware/error.js';
@@ -133,7 +133,9 @@ tournamentsRouter.get('/hall-of-fame', async (_req, res, next) => {
     const r = await query(
       `SELECT p.tournament_id, p.user_id, p.placement, p.medal, p.gold_coins, p.awarded_at,
               t.name AS tournament_name, t.starts_at,
-              u.username, u.nickname, u.avatar_url, u.rank_wins
+              u.username, u.nickname,
+              CASE WHEN u.avatar_url LIKE 'data:%' THEN NULL ELSE u.avatar_url END AS avatar_url,
+              u.rank_wins
          FROM tournament_payouts p
          JOIN tournaments t ON t.id = p.tournament_id
          LEFT JOIN users u ON u.id = p.user_id
@@ -162,7 +164,9 @@ tournamentsRouter.get('/overview', async (_req, res, next) => {
           LIMIT 10`
       ),
       query(
-        `SELECT id, username, nickname, avatar_url, rank_wins, gold_coins, games_won
+        `SELECT id, username, nickname,
+                CASE WHEN avatar_url LIKE 'data:%' THEN NULL ELSE avatar_url END AS avatar_url,
+                rank_wins, gold_coins, games_won
            FROM users
           WHERE is_banned = FALSE
             AND is_admin IS NOT TRUE
@@ -173,7 +177,8 @@ tournamentsRouter.get('/overview', async (_req, res, next) => {
       query(
         `SELECT p.tournament_id, p.user_id, p.placement, p.medal, p.gold_coins, p.awarded_at,
                 t.name AS tournament_name,
-                u.username, u.nickname, u.avatar_url
+                u.username, u.nickname,
+                CASE WHEN u.avatar_url LIKE 'data:%' THEN NULL ELSE u.avatar_url END AS avatar_url
            FROM tournament_payouts p
            JOIN tournaments t ON t.id = p.tournament_id
            LEFT JOIN users u ON u.id = p.user_id
@@ -426,9 +431,8 @@ async function liveViewerCount(tournamentId) {
   return sockets.length;
 }
 
-tournamentsRouter.post('/:id/settle', authRequired, async (req, res, next) => {
+tournamentsRouter.post('/:id/settle', authRequired, adminRequired, adminPermission(['tournaments.manage']), async (req, res, next) => {
   try {
-    if (!req.user.is_admin) throw new HttpError(403, 'admin only');
     const payouts = await settlePlacements({
       tournamentId: req.params.id,
       placements: req.body?.placements || [],

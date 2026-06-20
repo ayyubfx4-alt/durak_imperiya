@@ -65,6 +65,39 @@ test('viewFor hides other players hands', () => {
   assert.equal(Object.hasOwn(view, 'deckSize'), false);
 });
 
+test('viewFor keeps public player profile image metadata', () => {
+  const game = createGame({
+    players: [
+      { id: 'a', username: 'A', nickname: 'alpha', avatar_url: '/a.png', selected_avatar_frame: 'gold' },
+      { id: 'b', username: 'B', avatar_url: '/b.png' },
+    ],
+  });
+  const view = viewFor(game, 'a');
+  assert.equal(view.players[0].nickname, 'alpha');
+  assert.equal(view.players[0].avatar_url, '/a.png');
+  assert.equal(view.players[0].selected_avatar_frame, 'gold');
+  assert.equal(view.players[1].avatar_url, '/b.png');
+});
+
+test('viewFor masks face-down bluff attacks from opponents', () => {
+  const game = createGame({
+    bluffEnabled: true,
+    players: [{ id: 'a', username: 'A' }, { id: 'b', username: 'B' }],
+  });
+  const attacker = game.players[game.attackerIdx];
+  const card = attacker.hand[0];
+  const res = playAttack(game, attacker.id, card, { bluff: true, claimedRank: '6' });
+  assert.equal(res.ok, true);
+
+  const defenderView = viewFor(game, game.players[game.defenderIdx].id);
+  assert.deepEqual(defenderView.table[0].attack, { faceDown: true });
+  assert.equal(defenderView.table[0].claimedRank, '6');
+
+  const blufferView = viewFor(game, attacker.id);
+  assert.equal(blufferView.table[0].attack.rank, card.rank);
+  assert.equal(blufferView.table[0].attack.suit, card.suit);
+});
+
 test('engine: invalid attack rank rejected', () => {
   const game = createGame({ players: [{ id: 'a', username: 'A' }, { id: 'b', username: 'B' }] });
   const attacker = game.players[game.attackerIdx];

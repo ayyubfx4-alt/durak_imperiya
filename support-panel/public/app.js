@@ -4,10 +4,21 @@
   const PIN_KEY = 'durak.support.pin.ok';
   const DRAFT_KEY = 'durak.support.replyDrafts.v1';
   const app = document.getElementById('app');
+  const storage = {
+    get(key) {
+      try { return localStorage.getItem(key); } catch (_) { return ''; }
+    },
+    set(key, value) {
+      try { localStorage.setItem(key, value); } catch (_) {}
+    },
+    remove(key) {
+      try { localStorage.removeItem(key); } catch (_) {}
+    },
+  };
   const state = {
     user: null,
-    token: localStorage.getItem(TOKEN_KEY) || '',
-    pinOk: localStorage.getItem(PIN_KEY) === '1',
+    token: storage.get(TOKEN_KEY) || '',
+    pinOk: storage.get(PIN_KEY) === '1',
     pinDraft: '',
     pinError: '',
     stats: null,
@@ -23,6 +34,14 @@
     lastComposeAt: 0,
   };
 
+  function clearSession() {
+    state.token = '';
+    state.user = null;
+    state.pinOk = false;
+    storage.remove(TOKEN_KEY);
+    storage.remove(PIN_KEY);
+  }
+
   function request(method, path, body) {
     const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
@@ -35,18 +54,21 @@
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         if (res.status === 401) {
-          state.token = '';
-          localStorage.removeItem(TOKEN_KEY);
+          clearSession();
+          setTimeout(render, 0);
         }
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
       return data;
+    }).catch((err) => {
+      if (err instanceof TypeError) throw new Error('Tarmoq xatosi. Server bilan aloqa tekshirilsin.');
+      throw err;
     });
   }
 
   function readJson(key, fallback) {
     try {
-      const parsed = JSON.parse(localStorage.getItem(key) || '');
+      const parsed = JSON.parse(storage.get(key) || '');
       return parsed && typeof parsed === 'object' ? parsed : fallback;
     } catch (_) {
       return fallback;
@@ -54,11 +76,7 @@
   }
 
   function writeJson(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (_) {
-      // Storage can be unavailable in private mode. In-memory state still protects the draft.
-    }
+    storage.set(key, JSON.stringify(value));
   }
 
   function ticketDraft(id = state.selected?.id) {
@@ -207,16 +225,12 @@
         state.error = '';
         state.token = data.token || '';
         state.user = data.user || null;
-        localStorage.setItem(PIN_KEY, '1');
-        localStorage.setItem(TOKEN_KEY, state.token);
+        storage.set(PIN_KEY, '1');
+        storage.set(TOKEN_KEY, state.token);
         await bootstrap();
       } catch (err) {
-        state.pinOk = false;
+        clearSession();
         state.pinError = err.message === 'invalid pin' ? 'PIN kod xato' : (err.message || 'PIN tekshirishda xato');
-        state.token = '';
-        state.user = null;
-        localStorage.removeItem(PIN_KEY);
-        localStorage.removeItem(TOKEN_KEY);
         renderPinGate();
       }
     };
@@ -251,7 +265,7 @@
       try {
         const data = await api.login(username.value, password.value);
         state.token = data.token || '';
-        localStorage.setItem(TOKEN_KEY, state.token);
+        storage.set(TOKEN_KEY, state.token);
         state.user = data.user;
         state.error = '';
         await bootstrap();
@@ -300,11 +314,7 @@
     select.onchange = (e) => { state.status = e.target.value; loadList(true); };
     const logout = node('button', 'btn secondary', ['Chiqish']);
     logout.onclick = () => {
-      state.token = '';
-      state.user = null;
-      state.pinOk = false;
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(PIN_KEY);
+      clearSession();
       render();
     };
     filters.append(search, select, logout);
@@ -446,8 +456,7 @@
   async function bootstrap() {
     if (!state.pinOk) return renderPinGate();
     if (!state.token) {
-      state.pinOk = false;
-      localStorage.removeItem(PIN_KEY);
+      clearSession();
       return renderPinGate();
     }
     try {
@@ -460,11 +469,7 @@
       await loadList(true);
     } catch (err) {
       state.error = err.message || 'Kirish xato';
-      state.token = '';
-      state.user = null;
-      state.pinOk = false;
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(PIN_KEY);
+      clearSession();
       render();
     }
   }
@@ -545,11 +550,18 @@
   let lastMobileLayout = isMobile();
 
   setInterval(() => {
+    if (document.hidden) return;
     if (state.pinOk && state.token && state.user) {
       loadList(true);
       if (state.selected?.id) loadTicket(state.selected.id, true);
     }
   }, 5000);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !state.pinOk || !state.token || !state.user) return;
+    loadList(true);
+    if (state.selected?.id) loadTicket(state.selected.id, true);
+  });
 
   window.addEventListener('resize', debounce(() => {
     const mobile = isMobile();

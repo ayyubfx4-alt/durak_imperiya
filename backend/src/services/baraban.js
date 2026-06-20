@@ -10,7 +10,7 @@ import { getThresholds } from './progression.js';
 import { computeRankFromWins } from './rank.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_FREE_SPIN_GAMES_REQUIRED = Number(config.baraban?.gamesRequired || 10);
+const DEFAULT_FREE_SPIN_GAMES_REQUIRED = Number(config.baraban?.gamesRequired ?? 0);
 const VIP_DAYS = 1;
 const RANK_POINT_REWARD = 25;
 
@@ -51,7 +51,9 @@ function rollPrize(randomValue = Math.random()) {
 async function getBarabanGamesRequired() {
   try {
     const thresholds = await getThresholds();
-    return Math.max(0, Number(thresholds.baraban ?? DEFAULT_FREE_SPIN_GAMES_REQUIRED));
+    const configured = Math.max(0, Number(config.baraban?.gamesRequired ?? DEFAULT_FREE_SPIN_GAMES_REQUIRED));
+    const threshold = Math.max(0, Number(thresholds.baraban ?? configured));
+    return Math.min(threshold, configured);
   } catch (_) {
     return DEFAULT_FREE_SPIN_GAMES_REQUIRED;
   }

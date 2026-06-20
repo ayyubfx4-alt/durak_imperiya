@@ -57,6 +57,10 @@ export const api = {
 
   dashboardStats: () => get('/api/admin/dashboard/stats'),
   dashboardEvents: (limit = 50) => get('/api/admin/dashboard/events', { limit }),
+  adminEvents: async (category = null, limit = 50) => {
+    const rows = await get('/api/admin/dashboard/events', { limit });
+    return category ? rows.filter((event) => event.category === category) : rows;
+  },
   dashboardCharts: () => get('/api/admin/dashboard/charts'),
   stats: () => get('/api/admin/stats'),
   scalingMode: () => get('/api/admin/scaling'),
@@ -81,10 +85,13 @@ export const api = {
   kickSessions: (id) => del(`/api/admin/users/${id}/sessions`),
 
   rooms: () => get('/api/admin/rooms'),
+  roomMonitor: () => get('/api/admin/rooms'),
   roomDetail: (id) => get(`/api/admin/rooms/${encodeURIComponent(id)}`),
   closeRoom: (id) => del(`/api/admin/rooms/${encodeURIComponent(id)}`),
+  roomForceClose: (id) => post(`/api/admin/rooms/${encodeURIComponent(id)}/close`, {}),
   cleanupRooms: () => post('/api/admin/rooms/cleanup-stale', {}),
   kickPlayer: (roomId, userId) => post(`/api/admin/rooms/${encodeURIComponent(roomId)}/kick/${encodeURIComponent(userId)}`, {}),
+  games: (params) => get('/api/admin/games/history', params),
   gameHistory: (params) => get('/api/admin/games/history', params),
   gameStats: () => get('/api/admin/games/stats'),
 
@@ -158,6 +165,9 @@ export const api = {
   startTournament: (id) => post(`/api/admin/tournaments/${id}/start`, {}),
   endTournament: (id) => post(`/api/admin/tournaments/${id}/end`, {}),
   tournamentBracket: (id) => get(`/api/admin/tournaments/${id}/bracket`),
+  tournamentSeed: (id) => post(`/api/admin/tournaments/${id}/seed`, {}),
+  tournamentMatchResult: (matchId, winnerEntryId) => post(`/api/admin/tournaments/matches/${matchId}/result`, { winnerEntryId }),
+  tournamentAutoSettle: (id) => post(`/api/admin/tournaments/${id}/auto-settle`, {}),
   tournamentWinners: (id) => get(`/api/admin/tournaments/${id}/winners`),
   setTournamentWinners: (id, winners) => post(`/api/admin/tournaments/${id}/winners`, { winners }),
   disqualifyTournamentUser: (id, userId) => post(`/api/admin/tournaments/${id}/disqualify/${userId}`, {}),
@@ -174,6 +184,8 @@ export const api = {
   moderationReports: (params) => get('/api/admin/reports/moderation', params),
   exportReport: () => get('/api/admin/reports/export'),
   analyticsOverview: () => get('/api/admin/analytics/overview'),
+  analyticsGeo: () => get('/api/admin/analytics/geo'),
+  analyticsCustomerActivity: (params) => get('/api/admin/analytics/customer-activity', params),
   securityOverview: () => get('/api/admin/security/overview'),
   roles: () => get('/api/admin/roles'),
   updateRole: (role, permissions) => put(`/api/admin/roles/${encodeURIComponent(role)}`, { permissions }),

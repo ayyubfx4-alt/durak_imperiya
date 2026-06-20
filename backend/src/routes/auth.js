@@ -1,11 +1,20 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { authRequired } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { googleSignIn, checkNickname, setNickname } from '../services/googleAuth.js';
+import { telegramSignIn } from '../services/telegramAuth.js';
 import { guestLogin, login, register } from '../services/auth.js';
 import { syncUserGameStats } from '../services/gameStats.js';
 
 export const authRouter = Router();
+
+export const strictAuthLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 10,
+  standardHeaders: true,
+  message: { error: 'too many auth attempts, try again later' },
+});
 
 authRouter.get('/firebase-config', (_req, res) => {
   const config = {
@@ -39,17 +48,18 @@ authRouter.post('/guest', async (_req, res, next) => {
 });
 
 // Username/password registration. Rate-limited at the app level (see index.js).
-authRouter.post('/register', async (req, res, next) => {
+authRouter.post('/register', strictAuthLimiter, async (req, res, next) => {
   try {
     res.json(await register({
       ...req.body,
       referralCode: req.body?.referralCode || req.body?.referral_code || null,
+      countryCode: req.body?.countryCode || req.body?.country_code || null,
     }));
   } catch (err) { next(err); }
 });
 
 // Username/email + password login. Rate-limited at the app level.
-authRouter.post('/login', async (req, res, next) => {
+authRouter.post('/login', strictAuthLimiter, async (req, res, next) => {
   try {
     res.json(await login(req.body));
   } catch (err) { next(err); }
@@ -60,6 +70,15 @@ authRouter.post('/google', async (req, res, next) => {
   try {
     const { idToken } = req.body;
     const result = await googleSignIn(idToken);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ── Telegram Sign-In ──────────────────────────────────────────────────────
+authRouter.post('/telegram', async (req, res, next) => {
+  try {
+    const { initData } = req.body;
+    const result = await telegramSignIn(initData);
     res.json(result);
   } catch (err) { next(err); }
 });
@@ -91,7 +110,7 @@ authRouter.get('/me', authRequired, async (req, res, next) => {
               games_played, games_won, games_lost, games_draw,
               win_streak, loss_streak, bluffs_caught, bluffs_made,
               premium_until, referral_code, is_admin,
-              badges_showcase, selected_skin, selected_avatar_frame, locale,
+              badges_showcase, selected_skin, selected_avatar_frame, locale, country_code,
               total_donated_cents, nickname_set, settings_json AS settings, created_at
          FROM users WHERE id = $1`,
       [req.user.id]

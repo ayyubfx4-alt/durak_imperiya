@@ -97,6 +97,18 @@ function supportErrorMessage(err, fallback) {
   return err?.message || fallback;
 }
 
+function telegramSupportContext() {
+  const tg = window.__DURAK_TELEGRAM_WEBAPP__;
+  const tgState = window.__DURAK_TELEGRAM_WEBAPP_STATE__;
+  if (!tg || !tgState?.enabled) return null;
+  return {
+    enabled: true,
+    platform: tgState.platform || tg.platform || 'unknown',
+    version: tgState.version || tg.version || 'unknown',
+    initData: typeof tg.initData === 'string' ? tg.initData : '',
+  };
+}
+
 function readFileDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -201,7 +213,7 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'support-widget-css';
   style.textContent = `
-    .support-widget-root{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:calc(92px + env(safe-area-inset-bottom));z-index:9500;font-family:Inter,system-ui,sans-serif;color:#fff}
+    .support-widget-root{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:calc(24px + env(safe-area-inset-bottom));z-index:9500;font-family:Inter,system-ui,sans-serif;color:#fff}
     .support-widget-root.hidden{display:none}
     .support-fab{position:relative;display:grid;place-items:center;width:58px;height:58px;border-radius:19px;border:1px solid rgba(255,226,141,.92);background:linear-gradient(145deg,#fff0aa 0%,#a86616 48%,#2b1706 100%);box-shadow:0 18px 42px rgba(0,0,0,.52),0 0 28px rgba(226,177,59,.22),inset 0 2px 0 rgba(255,255,255,.42),inset 0 -14px 20px rgba(0,0,0,.32);color:#1c1005;font-size:24px;font-weight:1000;text-shadow:0 1px 0 rgba(255,255,255,.3);cursor:pointer}
     .support-fab:active{transform:translateY(1px) scale(.98)}
@@ -434,6 +446,7 @@ function renderCreate() {
           userAgent: navigator.userAgent,
           width: window.innerWidth,
           height: window.innerHeight,
+          telegram: telegramSupportContext(),
         },
       });
       if (data?.ticket) {

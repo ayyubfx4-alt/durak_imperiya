@@ -1,4 +1,4 @@
-// Waiting room (xona) — PREMIUM royal stilida.
+﻿// Waiting room (xona) — PREMIUM royal stilida.
 // MIJOZ KRITIK FIX:
 //   1. Yopiq stol bo'lsa, ROOM CODE xonada katta va ko'rinarli ko'rinadi
 //   2. "Kodni ulashish" (Share / Copy) tugmasi
@@ -11,7 +11,7 @@ import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
 import { avatarColorFor, avatarLetter } from '../cards.js';
 import { t } from '../i18n.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 
 export async function renderRoom(root, params) {
   const code = params.code;
@@ -373,8 +373,8 @@ export async function renderRoom(root, params) {
 
     // ───── ACTION BUTTONS ─────
     const me = room.seats.find((s) => s && s.id === state.user.id);
-    const allReady = room.seats.filter(Boolean).length === room.maxPlayers
-                  && room.seats.filter(Boolean).every(s => s.ready);
+    const seatedHumans = room.seats.filter((s) => s && !s.isBot);
+    const allHumansReady = seatedHumans.length > 0 && seatedHumans.every((s) => s.ready);
 
     const ready = h('button', {
       class: `btn-big ${me?.ready ? '' : 'green'} mt-16`,
@@ -386,12 +386,14 @@ export async function renderRoom(root, params) {
 
     const isHost = room.host?.id === state.user.id;
     const privateWaiting = room.isPrivate && taken < room.maxPlayers;
+    const canStart = isHost && !privateWaiting && allHumansReady;
     const startGame = h('button', {
-      class: `btn-big green mt-16 room-start-btn ${isHost && !privateWaiting ? '' : 'disabled'}`,
-      disabled: !isHost || privateWaiting,
+      class: `btn-big green mt-16 room-start-btn ${canStart ? '' : 'disabled'}`,
+      disabled: !canStart,
       onclick: async () => {
         if (!isHost) return toast('O\'yinni faqat host boshlaydi', 'info');
         if (privateWaiting) return toast("Avval do'stingizni taklif qiling yoki stolni oching.", 'info');
+        if (!allHumansReady) return toast('Hamma o‘yinchi, host ham, TAYYORMAN bosishi kerak', 'info');
         sfx.play('click');
         const r = await emitWithAck('room:start', { code }).catch((e) => ({ ok: false, error: e.message }));
         if (!r?.ok) toast(r?.error || 'O\'yin boshlanmadi', 'error');
@@ -400,7 +402,9 @@ export async function renderRoom(root, params) {
           navigate('game', { code });
         }
       },
-    }, [isHost ? (privateWaiting ? "DO'STNI KUTING" : 'O\'YINNI BOSHLASH') : 'HOST BOSHLASHINI KUTING']);
+    }, [isHost
+      ? (privateWaiting ? "DO'STNI KUTING" : (allHumansReady ? 'O\'YINNI BOSHLASH' : 'HAMMA TAYYOR BO‘LSIN'))
+      : 'HOST BOSHLASHINI KUTING']);
 
     const findOpponent = h('button', {
       class: 'btn-big mt-12',

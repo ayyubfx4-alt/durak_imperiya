@@ -30,9 +30,32 @@ import { adminAssetsRoot } from './services/adminAssets.js';
 import { bootstrapAdmin } from './services/auth.js';
 import { ensureSeeded as ensureBotPoolSeeded } from './game/botPool.js';
 import { ensureFakeDonationsSeeded } from './services/donations.js';
-import { pool as getPool } from './db.js';
-import { closeRedis } from './scaling/redisAdapter.js';
+import { pool as getPool, dbHealthCheck } from './db.js';
+import { closeRedis, countOnline, isAdapterEnabled } from './scaling/redisAdapter.js';
+import { getRoomManager } from './game/socketRegistry.js';
 import { startTelegramBot, stopTelegramBot } from './services/telegramBot.js';
+import { scalingMode } from './scaling/sessionStore.js';
+
+// ── M3: Sentry error tracking (optional — only activates when SENTRY_DSN set) ──
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    const sentryModule = await import('@sentry/node');
+    Sentry = sentryModule;
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: config.env,
+      tracesSampleRate: config.env === 'production' ? 0.1 : 1.0,
+      // Attach user context from req.user when available.
+      beforeSend(event) {
+        return event;
+      },
+    });
+    logger.info('[sentry] Sentry initialized (env=%s)', config.env);
+  } catch (e) {
+    logger.warn('[sentry] @sentry/node not installed — skipping: %s', e.message);
+  }
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -70,18 +93,55 @@ const coinLimiter = rateLimit({
 
 app.use(generalLimiter);
 
+// M2: Comprehensive health check — DB, Redis, rooms, system stats.
 app.get('/health', async (_req, res) => {
   try {
-    const pool = await getPool();
-    await pool.query('SELECT 1');
-    res.json({ ok: true, ts: Date.now() });
-  } catch (_) {
-    res.status(503).json({ ok: false });
+    // DB ping with latency
+    const db = await dbHealthCheck();
+
+    // Redis ping
+    let redis = { ok: false, latencyMs: null };
+    if (isAdapterEnabled()) {
+      const t = Date.now();
+      const online = await countOnline().catch(() => null);
+      redis = { ok: online !== null, latencyMs: Date.now() - t, onlineUsers: online ?? 0 };
+    } else {
+      redis = { ok: false, note: 'REDIS_URL not set — single-process mode' };
+    }
+
+    // Game stats
+    const mgr = getRoomManager();
+    const rooms      = mgr ? mgr.rooms.size : 0;
+    const activePlayers = mgr
+      ? Array.from(mgr.rooms.values()).reduce((s, r) => s + r.seats.filter((seat) => seat && !seat.isBot).length, 0)
+      : 0;
+
+    // Memory
+    const mem = process.memoryUsage();
+
+    const status = db.ok ? 'ok' : 'degraded';
+    res.status(db.ok ? 200 : 503).json({
+      status,
+      ts:         Date.now(),
+      uptime:     Math.floor(process.uptime()),
+      instance:   scalingMode().instanceId,
+      env:        config.env,
+      db:         { ok: db.ok, latencyMs: db.latencyMs, error: db.error },
+      redis:      redis,
+      game:       { activeRooms: rooms, activePlayers },
+      memory: {
+        heapUsedMb:  Math.round(mem.heapUsed  / 1048576),
+        heapTotalMb: Math.round(mem.heapTotal / 1048576),
+        rssMb:       Math.round(mem.rss       / 1048576),
+      },
+      version: process.env.npm_package_version || '1.1.0',
+    });
+  } catch (err) {
+    logger.error('[health] health check failed: %s', err.message);
+    res.status(503).json({ status: 'error', error: err.message });
   }
 });
 
-app.use('/api/auth/login', strictAuthLimiter);
-app.use('/api/auth/register', strictAuthLimiter);
 app.use('/api/auth', authRouter);
 app.use('/api/admin/pin-login', strictAuthLimiter);
 app.use('/api/users/me/daily-bonus', coinLimiter);
@@ -109,6 +169,10 @@ app.use('/api/admob', admobRouter);
 app.use('/api/payments', paymentsRouter);
 
 app.use(notFound);
+// M3: Sentry error handler must come before custom errorHandler.
+if (Sentry?.setupExpressErrorHandler) {
+  Sentry.setupExpressErrorHandler(app);
+}
 app.use(errorHandler);
 
 const httpServer = http.createServer(app);

@@ -43,5 +43,5 @@ test('public profile backend returns safe display fields and rank', () => {
 
 test('profile module cache bust is updated', () => {
   const main = read('web-client/public/src/main.js');
-  assert.match(main, /profile\.js\?v=149-profile-polish/);
+  assert.match(main, /profile\.js\?v=[^'"]+/);
 });

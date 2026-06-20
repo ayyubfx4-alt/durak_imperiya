@@ -17,7 +17,7 @@
  */
 
 let audioCtx = null;
-let enabled = (localStorage.getItem('pref_sound') ?? '1') === '1';
+let enabled = (localStorage.getItem('pref_sound') ?? '0') === '1';
 let musicEnabled = (localStorage.getItem('pref_music') ?? '0') === '1';
 let masterGain = null;
 let musicTimer = null;
@@ -117,45 +117,26 @@ function noise({ dur = 0.06, vol = 0.4, filterFreq = 1500, filterType = 'bandpas
 
 const SFX = {
   click: () => {
-    tone({ freq: 1200, dur: 0.05, type: 'square', vol: 0.18 });
+    tone({ freq: 560, slideTo: 720, dur: 0.08, type: 'triangle', vol: 0.16 });
   },
-  deal: () => {
-    // Karta tarqatish ovozi (oz "swoosh")
-    noise({ dur: 0.08, vol: 0.30, filterFreq: 2400, filterType: 'bandpass' });
-  },
-  cardThrow: () => {
-    // Karta stolga uchirilganda
-    noise({ dur: 0.12, vol: 0.4, filterFreq: 1800, filterType: 'highpass' });
-    setTimeout(() => tone({ freq: 220, dur: 0.06, type: 'triangle', vol: 0.2 }), 30);
-  },
-  cardBeat: () => {
-    // Karta urilganda (zarba)
-    tone({ freq: 380, slideTo: 140, dur: 0.18, type: 'sawtooth', vol: 0.35 });
-    noise({ dur: 0.1, vol: 0.3, filterFreq: 900 });
-  },
-  take: () => {
-    // O'yinchi kartani olganda (kichik "schwoop")
-    tone({ freq: 260, slideTo: 120, dur: 0.22, type: 'sine', vol: 0.3 });
-  },
+  deal: () => {},
+  cardBeat: () => {},
+  take: () => {},
   win: () => {
-    // G'alaba fanfara
     [523, 659, 784, 1047].forEach((f, i) =>
       setTimeout(() => tone({ freq: f, dur: 0.18, type: 'triangle', vol: 0.4 }), i * 90)
     );
   },
   lose: () => {
-    // Mag'lubiyat (decending)
     [400, 350, 280, 200].forEach((f, i) =>
       setTimeout(() => tone({ freq: f, dur: 0.18, type: 'sawtooth', vol: 0.3 }), i * 110)
     );
   },
   coin: () => {
-    // Coin (tanga) ovozi — yorqin "ding"
     tone({ freq: 988, dur: 0.10, type: 'sine', vol: 0.4 });
     setTimeout(() => tone({ freq: 1319, dur: 0.16, type: 'sine', vol: 0.35 }), 40);
   },
   warning: () => {
-    // Timeout warning (urgent beep)
     tone({ freq: 880, dur: 0.08, type: 'square', vol: 0.4 });
     setTimeout(() => tone({ freq: 880, dur: 0.08, type: 'square', vol: 0.4 }), 130);
   },
@@ -163,11 +144,15 @@ const SFX = {
     tone({ freq: 660, dur: 0.10, type: 'triangle', vol: 0.30 });
     setTimeout(() => tone({ freq: 880, dur: 0.14, type: 'triangle', vol: 0.30 }), 80);
   },
+  achievement: () => {
+    [784, 988, 1175].forEach((f, i) =>
+      setTimeout(() => tone({ freq: f, dur: 0.13, type: 'triangle', vol: 0.32 }), i * 75)
+    );
+  },
   error: () => {
     tone({ freq: 200, dur: 0.18, type: 'sawtooth', vol: 0.35 });
   },
   shuffle: () => {
-    // Kartalar aralashtirilishi
     for (let i = 0; i < 6; i++) {
       setTimeout(() => noise({ dur: 0.04, vol: 0.18, filterFreq: 2000 + Math.random() * 1000 }), i * 35);
     }
@@ -235,8 +220,13 @@ function applyVoiceAudio(audio) {
 
 export const sfx = {
   play(name) {
-    if (!enabled) return;
-    try { SFX[name]?.(); } catch (_) { /* silent */ }
+    if (!enabled || !SFX[name]) return false;
+    try {
+      SFX[name]();
+      return true;
+    } catch (_) {
+      return false;
+    }
   },
   configure(options = {}) {
     const hasSound = Object.prototype.hasOwnProperty.call(options, 'soundEnabled');
@@ -304,6 +294,7 @@ function readVolumeFromValue(value, fallback) {
 
 // Birinchi user gesture'da audio context'ni "unlock" qilish (iOS Safari uchun)
 function unlock() {
+  if (!enabled && !musicEnabled) return;
   ctx();
   if (musicEnabled) startMusic();
   window.removeEventListener('touchstart', unlock);

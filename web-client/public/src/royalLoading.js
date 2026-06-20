@@ -111,7 +111,13 @@ function applyLoaderImage(variant = 'boot') {
   loaderEl.style.setProperty('--royal-loader-position', meta.position || '50% center');
   loaderEl.classList.add('uses-image');
   const bg = text('.royal-loader-bg-blur');
-  if (bg) bg.style.backgroundImage = `url("${meta.src}")`;
+  if (bg) {
+    bg.style.backgroundImage = `url("${meta.src}")`;
+    // Darhol ko'rsatish: requestAnimationFrame bilan opacity 1 qilamiz
+    requestAnimationFrame(() => {
+      if (bg) bg.style.opacity = '1';
+    });
+  }
 }
 
 function createLoader() {

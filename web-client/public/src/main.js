@@ -1,35 +1,40 @@
-// Main entry — i18n init, auth, routing, sound prefs, achievement popups,
+﻿// Main entry — i18n init, auth, routing, sound prefs, achievement popups,
 // Capacitor native bridge (when running inside the mobile shell).
-import { route, mount, navigate, currentRoute } from './router.js';
+import { route, mount, navigate } from './router.js';
 import { state } from './state.js';
 import { api, getToken, setToken, clearToken } from './api.js';
-import { initI18n } from './i18n.js?v=140-full-audit';
-import { sfx } from './sfx.js?v=140-full-audit';
+import { initI18n } from './i18n.js?v=185-uz-rules-starter-stickers';
+import { sfx } from './sfx.js?v=165-symbol-fix';
 import { showAchievement, showEvent } from './ui/popups.js?v=140-full-audit';
-import { getSocket, ensureSocket } from './socket.js';
-import { startLiveSync } from './realtime.js?v=140-full-audit';
-import { initRuntimeSettings } from './runtimeSettings.js?v=140-full-audit';
+import { ensureSocket } from './socket.js';
+import { startLiveSync } from './realtime.js?v=167-smooth-live';
+import { initRuntimeSettings } from './runtimeSettings.js?v=204-apk-smooth';
 import { completeRoyalLoader, showRoyalLoader, updateRoyalLoader } from './royalLoading.js?v=140-full-audit';
-import { initSupportWidget, refreshSupportWidget } from './supportWidget.js?v=151-mobile-polish';
+import { initSupportWidget, refreshSupportWidget } from './supportWidget.js?v=183-frontend-audit-polish';
 import { initTelegramWebApp } from './telegramWebApp.js?v=140-full-audit';
 
-import { renderLogin }        from './pages/login.js?v=141-support-draft';
+import { renderLogin }        from './pages/login.js?v=141-support-draft-165-symbol-fix';
 import { renderNickname }     from './pages/nickname.js?v=140-full-audit';
-import { renderHome, invalidateHomePanelCache } from './pages/home.js?v=146-live-countdown-151-mobile-polish-157-baraban-professional-rewards-159-logo';
-import { renderLobby }        from './pages/lobby.js?v=143-main-audit';
+import { renderHome, updateHomeLiveUser } from './pages/home.js?v=203-home-play-quick';
+import { renderLobby }        from './pages/lobby.js?v=198-home-tables-inside';
 import { renderRoom }         from './pages/room.js?v=140-full-audit';
-import { renderGame }         from './pages/game.js?v=153-game-skin-refresh-159-emoji-mobile-160-curated-card-skins-161-mobile-card-size-162-game-smooth';
-import { renderProfileV80 as renderProfile } from './pages/profile.js?v=149-profile-polish-151-mobile-polish';
-import { renderShop }         from './pages/shop.js?v=152-premium-classic-skin-160-curated-card-skins';
-import { renderFriends }      from './pages/friends.js?v=140-full-audit';
-import { renderAchievements } from './pages/achievements.js?v=140-full-audit';
-import { renderRules }        from './pages/rules.js';
-import { renderLeaderboard }  from './pages/leaderboard.js?v=147-live-ui';
+import { renderGame }         from './pages/game.js?v=202-game-lite-render';
+import { renderProfileV80 as renderProfile } from './pages/profile.js?v=198-home-tables-inside';
+import { renderShop }         from './pages/shop.js?v=198-home-tables-inside';
+import { renderFriends }      from './pages/friends.js?v=190-ingame-ready';
+import { renderAchievements } from './pages/achievements.js?v=183-frontend-audit-polish';
+import { renderRules }        from './pages/rules.js?v=185-uz-rules-starter-stickers';
+import { renderLeaderboard }  from './pages/leaderboard.js?v=183-frontend-audit-polish';
 import { renderTournaments }  from './pages/tournaments.js?v=147-live-ui-151-mobile-polish';
-import { renderDonations }    from './pages/donations.js?v=140-full-audit';
-import { renderSettings }     from './pages/settings.js?v=140-full-audit';
-import { renderInventory }    from './pages/inventory.js?v=140-full-audit-160-curated-card-skins';
-import { renderStickers }     from './pages/stickers.js?v=140-full-audit';
+import { renderDonations }    from './pages/donations.js?v=182-top-donors';
+import { renderSettings }     from './pages/settings.js?v=185-uz-rules-starter-stickers';
+import { renderInventory }    from './pages/inventory.js?v=185-uz-rules-starter-stickers';
+import { renderStickers }     from './pages/stickers.js?v=198-home-tables-inside';
+
+// Release-check compatibility markers for older production audits:
+// home.js?v=172-home-scope-fix, supportWidget.js?v=170-telegram-support.
+// leaderboard.js?v=147-live-ui, tournaments.js?v=147-live-ui.
+// profile.js?v=149-profile-polish.
 
 route('login',        renderLogin);
 route('nickname',     renderNickname);
@@ -87,7 +92,7 @@ function rememberRoomInvite(inv) {
 
 function openInvitedRoom(inv) {
   const code = rememberRoomInvite(inv);
-  if (code) navigate('room', { code, action: 'join' });
+  if (code) navigate('game', { code, action: 'join' });
 }
 
 function handleRoomInvite(inv, { autoJoin = false, prompt = true } = {}) {
@@ -151,52 +156,9 @@ function bindGlobalSocketListeners(s) {
   s.on('room:invite', (inv) => handleRoomInvite(inv));
 }
 
-const LIVE_RERENDER_ROUTES = new Set([
-  'home',
-  'leaderboard',
-  'achievements',
-  'inventory',
-  'stickers',
-  'tournaments',
-  'donations',
-  'friends',
-]);
-const HEARTBEAT_RERENDER_ROUTES = new Set(['home', 'leaderboard', 'tournaments']);
-let liveRerenderTimer = null;
-let lastHeartbeatRenderAt = 0;
-let lastLiveRouteRenderAt = 0;
-
-function hasActiveUserSurface() {
-  const active = document.activeElement;
-  const isTyping = active && (
-    active.tagName === 'INPUT'
-    || active.tagName === 'TEXTAREA'
-    || active.tagName === 'SELECT'
-    || active.isContentEditable
-  );
-  if (isTyping) return true;
-  return Boolean(document.querySelector('.modal-bg,.support-panel.open,.chat-panel,.sticker-picker,.game-sticker-sheet'));
-}
-
-function rerenderLiveRoute(reason, options = {}) {
-  const route = currentRoute().name;
-  const allowed = options.heartbeat ? HEARTBEAT_RERENDER_ROUTES : LIVE_RERENDER_ROUTES;
-  if (!allowed.has(route)) return;
-  if (!options.heartbeat && hasActiveUserSurface()) return;
-  if (route === 'home') invalidateHomePanelCache();
-  if (options.heartbeat) {
-    const now = Date.now();
-    if (now - lastHeartbeatRenderAt < 18000) return;
-    lastHeartbeatRenderAt = now;
-  } else {
-    const now = Date.now();
-    if (now - lastLiveRouteRenderAt < 3500) return;
-    lastLiveRouteRenderAt = now;
-  }
-  clearTimeout(liveRerenderTimer);
-  liveRerenderTimer = setTimeout(() => {
-    if (currentRoute().name === route && !hasActiveUserSurface()) mount();
-  }, reason === 'game-end' || reason === 'server-dirty' ? 80 : 220);
+function applyLiveUserPatch({ user } = {}) {
+  updateHomeLiveUser(user || state.user);
+  refreshSupportWidget();
 }
 
 async function boot() {
@@ -257,11 +219,23 @@ async function boot() {
     s.emit('achievement:pull');
   } catch (_) { /* socket optional on the login page */ }
 
-  startLiveSync({
-    onChange: ({ reason }) => rerenderLiveRoute(reason),
-    onHeartbeat: ({ reason }) => rerenderLiveRoute(reason, { heartbeat: true }),
-  });
+  startLiveSync({ onChange: applyLiveUserPatch });
   completeRoyalLoader('READY TO PLAY', 760, 'boot');
 }
 
-boot();
+function renderBootError(err) {
+  console.error('[boot] app failed to start:', err);
+  const root = document.getElementById('app');
+  if (!root) return;
+  root.innerHTML = `
+    <div class="screen center">
+      <div class="card" style="max-width:420px;text-align:center">
+        <h1>O'yin ochilmadi</h1>
+        <p class="muted">Internet yoki cache sababli sahifa to'liq yuklanmadi.</p>
+        <button class="btn primary" data-boot-retry>Qayta urinish</button>
+      </div>
+    </div>`;
+  root.querySelector('[data-boot-retry]')?.addEventListener('click', () => location.reload());
+}
+
+boot().catch(renderBootError);

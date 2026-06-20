@@ -1,9 +1,9 @@
-// Stickers page - premium neon pack store fed by backend catalog assets.
+﻿// Stickers page - premium neon pack store fed by backend catalog assets.
 import { h } from '../ui.js';
 import { api } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 
 const FALLBACK_THEME = {
   color: '#e1b14c',
@@ -185,24 +185,26 @@ function ensureStyles() {
       z-index: 1;
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      grid-template-rows: repeat(2, 72px);
+      grid-template-rows: repeat(2, 64px);
       align-items: center;
       justify-items: center;
-      gap: 7px 11px;
-      padding: 3px 8px 12px;
+      gap: 6px 8px;
+      padding: 4px 8px 12px;
     }
     .sticker-face {
-      width: 72px;
-      height: 72px;
+      width: 64px;
+      height: 64px;
       display: grid;
       place-items: center;
-      border-radius: 22px;
+      box-sizing: border-box;
+      padding: 4px;
+      border-radius: 12px;
       filter: drop-shadow(0 10px 13px rgba(0,0,0,.48));
-      transform: rotate(var(--tilt, 0deg));
+      overflow: visible;
     }
     .sticker-face img {
-      width: 118%;
-      height: 118%;
+      width: 100%;
+      height: 100%;
       object-fit: contain;
       display: block;
     }
@@ -319,8 +321,8 @@ function ensureStyles() {
       .sticker-pack-head { display: block; margin-bottom: 4px; }
       .sticker-pack-name { font-size: 12px; line-height: 1.15; }
       .sticker-pack-tag { display: none; }
-      .sticker-face-grid { grid-template-rows: repeat(2, 46px); gap: 4px; padding: 4px 2px 8px; }
-      .sticker-face { width: 46px; height: 46px; border-radius: 8px; }
+      .sticker-face-grid { grid-template-rows: repeat(2, 44px); gap: 4px; padding: 4px 2px 8px; }
+      .sticker-face { width: 44px; height: 44px; border-radius: 8px; padding: 3px; }
       .sticker-buy-pill { min-width: 96px; height: 30px; font-size: 15px; }
       .stickers-legend-bar {
         left: 8px;
@@ -343,17 +345,31 @@ function packTheme(pack) {
   };
 }
 
-function renderFace(sticker, index) {
+function renderFace(sticker) {
   const img = typeof sticker === 'string' ? sticker : sticker?.img;
-  return h('div', { class: 'sticker-face', style: `--tilt:${index % 2 ? '4deg' : '-3deg'}` }, [
+  return h('div', { class: 'sticker-face' }, [
     h('img', { src: img, alt: sticker?.name || '' }),
   ]);
+}
+
+function previewFaces(pack) {
+  const source = Array.isArray(pack.preview) && pack.preview.length ? pack.preview : (Array.isArray(pack.stickers) ? pack.stickers : []);
+  const faces = source.filter(Boolean).slice(0, 8);
+  if (!faces.length) return faces;
+  while (faces.length < 8) {
+    const last = faces[faces.length - 1];
+    faces.push(typeof last === 'string'
+      ? last
+      : { ...last, name: last?.name || `${pack.name || 'Sticker'} ${faces.length + 1}` });
+  }
+  return faces;
 }
 
 function renderPackCard(root, pack) {
   const theme = packTheme(pack);
   const owned = Number(pack.owned || 0) > 0;
-  const faces = (pack.preview || pack.stickers || []).slice(0, 8);
+  const faces = previewFaces(pack);
+  const total = Number(pack.size || pack.total || (pack.stickers || []).length || faces.length || 0);
   return h('article', {
     class: 'sticker-pack-card',
     style: `--pack-color:${theme.color};--pack-glow:${theme.glow};--pack-panel:${theme.panel}`,
@@ -361,7 +377,7 @@ function renderPackCard(root, pack) {
     h('div', { class: 'sticker-pack-head' }, [
       h('span', { class: 'sticker-pack-tag' }, [owned ? 'OLINGAN' : (pack.tag || 'PACK')]),
       h('div', { class: 'sticker-pack-name' }, [String(pack.name || '').toUpperCase()]),
-      h('span', { class: 'sticker-pack-tag' }, [pack.rarity ? pack.rarity.toUpperCase() : 'PACK']),
+      h('span', { class: 'sticker-pack-tag' }, [total ? `${total} DONA` : 'PACK']),
     ]),
     h('div', { class: 'sticker-face-grid' }, faces.map(renderFace)),
     h('div', { class: 'sticker-buy-row' }, [
@@ -378,7 +394,7 @@ function renderPackCard(root, pack) {
             toast(`${pack.name} maxsus yutuqlardan ochiladi`, 'info');
             return;
           }
-          if (!confirm(`${pack.name} paketini 🪙 ${pack.priceGold} ga sotib olasizmi?`)) return;
+          if (!confirm(`${pack.name} paketini GC ${pack.priceGold} ga sotib olasizmi?`)) return;
           try {
             const result = await api.stickerBuy(pack.id);
             if (result?.goldCoins !== undefined && state.user) state.user.gold_coins = result.goldCoins;
@@ -389,7 +405,7 @@ function renderPackCard(root, pack) {
             toast(e.message || 'Xatolik', 'error');
           }
         },
-      }, [owned ? "O'YINDA BOR" : `🪙 ${pack.priceGold || 'FREE'}`]),
+      }, [owned ? "O'YINDA BOR" : `GC ${pack.priceGold || 'FREE'}`]),
     ]),
   ]);
 }
@@ -400,7 +416,7 @@ function renderLegendBar() {
     h('div', { class: 'legend-badge legend-purple' }, ['✦', 'ANIMATSIYALI']),
     h('div', { class: 'legend-badge legend-blue' }, ['⚡', 'OVOZ EFFEKTLLI']),
     h('div', { class: 'legend-badge legend-green' }, ['🎁', 'DOIM YANGILANADI']),
-    h('div', { class: 'legend-rate' }, ['55 🪙 = 1 USD']),
+    h('div', { class: 'legend-rate' }, ['55 GC = 1 USD']),
   ]);
 }
 
@@ -431,7 +447,7 @@ export async function renderStickers(root) {
       h('b', {}, ['🎴 Stikerlar']),
       h('small', {}, ['Durak Imperia Neon Packs']),
     ]),
-    h('div', { class: 'stickers-balance' }, ['🪙', fmt(gold)]),
+    h('div', { class: 'stickers-balance' }, ['GC', fmt(gold)]),
   ]));
 
   const scroll = h('div', { class: 'stickers-neon-scroll' }, [

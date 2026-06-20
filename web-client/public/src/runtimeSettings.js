@@ -1,5 +1,5 @@
-import { PREF_DEFAULTS, localMusicPreference, musicWasUserSet, prefValue } from './preferences.js?v=111-encoding-fix';
-import { sfx } from './sfx.js?v=111-encoding-fix';
+﻿import { PREF_DEFAULTS, localMusicPreference, musicWasUserSet, prefValue } from './preferences.js?v=164-i18n-audio';
+import { sfx } from './sfx.js?v=164-i18n-audio';
 
 const FPS_VALUES = [30, 60, 90, 120];
 const QUALITY_VALUES = ['low', 'medium', 'high', 'ultra'];
@@ -7,6 +7,31 @@ const EFFECT_VALUES = ['low', 'medium', 'high'];
 const LANG_VALUES = ['uz', 'ru', 'en'];
 const HUD_VALUES = ['compact', 'middle', 'wide'];
 const CARD_PLACE_VALUES = ['tap', 'drag'];
+const NATIVE_PREF_DEFAULTS = {
+  pref_graphics_quality: 'low',
+  pref_effects_quality: 'low',
+  pref_lighting_quality: 'low',
+  pref_fps_limit: 30,
+  pref_shadows: false,
+  pref_antialiasing: false,
+  pref_reward_anim: false,
+};
+
+function isNativeShell() {
+  return !!(typeof window !== 'undefined' && (
+    window.__DURAK_NATIVE_SHELL__
+    || window.Capacitor?.isNativePlatform?.()
+    || window.Capacitor
+  ));
+}
+
+function hasStoredPreference(key) {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(key) !== null;
+  } catch (_) {
+    return false;
+  }
+}
 
 function pick(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
@@ -66,7 +91,19 @@ export function normalizeRuntimeSettings(settings = {}) {
 
 export function runtimeSettingsFrom(user = null) {
   const next = {};
-  for (const key of Object.keys(PREF_DEFAULTS)) next[key] = prefValue(key, user);
+  const userSettings = user?.settings || {};
+  const nativeShell = isNativeShell();
+  for (const key of Object.keys(PREF_DEFAULTS)) {
+    next[key] = prefValue(key, user);
+    if (
+      nativeShell
+      && Object.prototype.hasOwnProperty.call(NATIVE_PREF_DEFAULTS, key)
+      && !hasStoredPreference(key)
+      && !Object.prototype.hasOwnProperty.call(userSettings, key)
+    ) {
+      next[key] = NATIVE_PREF_DEFAULTS[key];
+    }
+  }
   return normalizeRuntimeSettings(next);
 }
 

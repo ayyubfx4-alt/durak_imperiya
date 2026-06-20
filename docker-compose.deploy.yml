@@ -1,13 +1,100 @@
+x-backend-env: &backend-env
+  NODE_ENV: production
+  PORT: 4000
+  DATABASE_URL: postgres://${POSTGRES_USER:-durak}:${POSTGRES_PASSWORD:-durak}@postgres:5432/${POSTGRES_DB:-durak}
+  PGSSLMODE: ${PGSSLMODE:-disable}
+  DB_POOL_MAX: ${DB_POOL_MAX:-20}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value}
+  CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be set to the HTTPS production origin}
+  ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-admin@durak.local}
+  ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?ADMIN_BOOTSTRAP_PASSWORD must be set}
+  ADMIN_PIN: ${ADMIN_PIN:?ADMIN_PIN must be set}
+  INSTANCE_PREFIX: ${INSTANCE_PREFIX:-durak-be}
+  INSTANCE_COUNT: ${INSTANCE_COUNT:-4}
+  PRESENCE_TTL_S: ${PRESENCE_TTL_S:-60}
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+  PUBLIC_ADMIN_URL: ${PUBLIC_ADMIN_URL:-}
+  PRIVACY_POLICY_URL: ${PRIVACY_POLICY_URL:-}
+  AD_BALANCE_CAP: ${AD_BALANCE_CAP:-50000}
+  ALLOW_DEV_PURCHASES: ${ALLOW_DEV_PURCHASES:-0}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_GAME_URL: ${TELEGRAM_GAME_URL:-}
+  TELEGRAM_ADMIN_URL: ${TELEGRAM_ADMIN_URL:-}
+  TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-8324791195}
+  TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
+  TELEGRAM_HERO_IMAGE_URL: ${TELEGRAM_HERO_IMAGE_URL:-}
+  TELEGRAM_PLAY_MARKET_URL: ${TELEGRAM_PLAY_MARKET_URL:-}
+  TELEGRAM_STARS_ENABLED: ${TELEGRAM_STARS_ENABLED:-1}
+  TELEGRAM_BOT_POLLING_ENABLED: ${TELEGRAM_BOT_POLLING_ENABLED:-1}
+  TELEGRAM_BOT_INSTANCE_ID: ${TELEGRAM_BOT_INSTANCE_ID:-durak-be-1}
+  TELEGRAM_DROP_PENDING_UPDATES: ${TELEGRAM_DROP_PENDING_UPDATES:-0}
+  TURN_REALM: ${TURN_REALM:-durakimperia}
+  TURN_USER: ${TURN_USER:-}
+  TURN_PASSWORD: ${TURN_PASSWORD:-}
+  VOICE_ICE_SERVERS: ${VOICE_ICE_SERVERS:-}
+  RELEASE_PLATFORMS: ${RELEASE_PLATFORMS:-android}
+  GOOGLE_PLAY_PACKAGE_NAME: ${GOOGLE_PLAY_PACKAGE_NAME:-com.durakimperia.game}
+  GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+  APPLE_SHARED_SECRET: ${APPLE_SHARED_SECRET:-}
+  ADMOB_ANDROID_APP_ID: ${ADMOB_ANDROID_APP_ID:-}
+  ADMOB_IOS_APP_ID: ${ADMOB_IOS_APP_ID:-}
+  ADMOB_REWARDED_ANDROID_ID: ${ADMOB_REWARDED_ANDROID_ID:-}
+  ADMOB_REWARDED_IOS_ID: ${ADMOB_REWARDED_IOS_ID:-}
+  ADMOB_HALAL_CATEGORIES_BLOCKED: ${ADMOB_HALAL_CATEGORIES_BLOCKED:-0}
+  PREMIUM_MONTHLY_USD: ${PREMIUM_MONTHLY_USD:-}
+  PREMIUM_QUARTERLY_USD: ${PREMIUM_QUARTERLY_USD:-}
+  PREMIUM_YEARLY_USD: ${PREMIUM_YEARLY_USD:-}
+  PREMIUM_PRICES_APPROVED: ${PREMIUM_PRICES_APPROVED:-0}
+  GDEVELOP_SILVER_ACTIVE: ${GDEVELOP_SILVER_ACTIVE:-0}
+  USE_NODE_BACKEND_ONLY: ${USE_NODE_BACKEND_ONLY:-1}
+  ANDROID_RELEASE_KEYSTORE_READY: ${ANDROID_RELEASE_KEYSTORE_READY:-0}
+  ANDROID_TARGET_SDK: ${ANDROID_TARGET_SDK:-35}
+  GOOGLE_PLAY_BILLING_MAJOR: ${GOOGLE_PLAY_BILLING_MAJOR:-8}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
+  STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
+  FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+  FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
+  FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
+  FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+  FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
+  FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-}
+  FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+  FIREBASE_APP_ID: ${FIREBASE_APP_ID:-}
+  FIREBASE_MEASUREMENT_ID: ${FIREBASE_MEASUREMENT_ID:-}
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  restart: always
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4000/health | grep -q '\"status\":\"ok\"'"]
+    interval: 15s
+    timeout: 5s
+    retries: 5
+    start_period: 25s
+  volumes:
+    - admin_uploads:/app/uploads
+
 services:
   postgres:
     image: postgres:16-alpine
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-durak}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-durak}
       POSTGRES_DB: ${POSTGRES_DB:-durak}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-durak} -d ${POSTGRES_DB:-durak}"]
       interval: 5s
@@ -16,96 +103,94 @@ services:
 
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
+    restart: always
     command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "100"]
     volumes:
-      - redisdata:/data
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  turn:
+    image: coturn/coturn:4.6
+    restart: always
+    command:
+      - turnserver
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${TURN_REALM:-durakimperia}
+      - --user=${TURN_USER:?TURN_USER must be set}:${TURN_PASSWORD:?TURN_PASSWORD must be set}
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --log-file=stdout
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
+
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    <<: *backend-common
     environment:
-      NODE_ENV: production
-      PORT: 4000
-      DATABASE_URL: postgres://${POSTGRES_USER:-durak}:${POSTGRES_PASSWORD:-durak}@postgres:5432/${POSTGRES_DB:-durak}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value}
-      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be set to the HTTPS production origin}
-      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-admin@durak.local}
-      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-2202}
-      ADMIN_PIN: ${ADMIN_PIN:-2202}
+      <<: *backend-env
       INSTANCE_ID: ${INSTANCE_ID:-durak-be-1}
-      INSTANCE_PREFIX: ${INSTANCE_PREFIX:-durak-be}
-      INSTANCE_COUNT: ${INSTANCE_COUNT:-1}
-      PRESENCE_TTL_S: ${PRESENCE_TTL_S:-60}
-      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
-      PRIVACY_POLICY_URL: ${PRIVACY_POLICY_URL:-}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_GAME_URL: ${TELEGRAM_GAME_URL:-}
-      TELEGRAM_ADMIN_URL: ${TELEGRAM_ADMIN_URL:-}
-      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-8324791195}
-      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
-      TELEGRAM_HERO_IMAGE_URL: ${TELEGRAM_HERO_IMAGE_URL:-}
-      TELEGRAM_PLAY_MARKET_URL: ${TELEGRAM_PLAY_MARKET_URL:-}
-      TELEGRAM_STARS_ENABLED: ${TELEGRAM_STARS_ENABLED:-1}
-      TELEGRAM_BOT_POLLING_ENABLED: ${TELEGRAM_BOT_POLLING_ENABLED:-1}
-      TELEGRAM_BOT_INSTANCE_ID: ${TELEGRAM_BOT_INSTANCE_ID:-durak-be-1}
-      TELEGRAM_DROP_PENDING_UPDATES: ${TELEGRAM_DROP_PENDING_UPDATES:-0}
-      RELEASE_PLATFORMS: ${RELEASE_PLATFORMS:-android}
-      GOOGLE_PLAY_PACKAGE_NAME: ${GOOGLE_PLAY_PACKAGE_NAME:-com.durakimperia.game}
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
-      APPLE_SHARED_SECRET: ${APPLE_SHARED_SECRET:-}
-      ADMOB_ANDROID_APP_ID: ${ADMOB_ANDROID_APP_ID:-}
-      ADMOB_IOS_APP_ID: ${ADMOB_IOS_APP_ID:-}
-      ADMOB_REWARDED_ANDROID_ID: ${ADMOB_REWARDED_ANDROID_ID:-}
-      ADMOB_REWARDED_IOS_ID: ${ADMOB_REWARDED_IOS_ID:-}
-      ADMOB_HALAL_CATEGORIES_BLOCKED: ${ADMOB_HALAL_CATEGORIES_BLOCKED:-0}
-      PREMIUM_MONTHLY_USD: ${PREMIUM_MONTHLY_USD:-}
-      PREMIUM_QUARTERLY_USD: ${PREMIUM_QUARTERLY_USD:-}
-      PREMIUM_YEARLY_USD: ${PREMIUM_YEARLY_USD:-}
-      PREMIUM_PRICES_APPROVED: ${PREMIUM_PRICES_APPROVED:-0}
-      GDEVELOP_SILVER_ACTIVE: ${GDEVELOP_SILVER_ACTIVE:-0}
-      USE_NODE_BACKEND_ONLY: ${USE_NODE_BACKEND_ONLY:-1}
-      ANDROID_RELEASE_KEYSTORE_READY: ${ANDROID_RELEASE_KEYSTORE_READY:-0}
-      ANDROID_TARGET_SDK: ${ANDROID_TARGET_SDK:-35}
-      GOOGLE_PLAY_BILLING_MAJOR: ${GOOGLE_PLAY_BILLING_MAJOR:-8}
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
-      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
-      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
-      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL:-}
-      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY:-}
-      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
-      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
-      FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-}
-      FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
-      FIREBASE_APP_ID: ${FIREBASE_APP_ID:-}
     ports:
       - "14000:4000"
-    volumes:
-      - admin_uploads:/app/uploads
+
+  backend-2:
+    <<: *backend-common
+    environment:
+      <<: *backend-env
+      INSTANCE_ID: ${INSTANCE_PREFIX:-durak-be}-2
+
+  backend-3:
+    <<: *backend-common
+    environment:
+      <<: *backend-env
+      INSTANCE_ID: ${INSTANCE_PREFIX:-durak-be}-3
+
+  backend-4:
+    <<: *backend-common
+    environment:
+      <<: *backend-env
+      INSTANCE_ID: ${INSTANCE_PREFIX:-durak-be}-4
 
   web-client:
     build:
       context: ./web-client
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: always
+    environment:
+      APP_ENV: production
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-}
+      FIREBASE_AUTH_DOMAIN: ${FIREBASE_AUTH_DOMAIN:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_STORAGE_BUCKET: ${FIREBASE_STORAGE_BUCKET:-}
+      FIREBASE_MESSAGING_SENDER_ID: ${FIREBASE_MESSAGING_SENDER_ID:-}
+      FIREBASE_APP_ID: ${FIREBASE_APP_ID:-}
+      FIREBASE_MEASUREMENT_ID: ${FIREBASE_MEASUREMENT_ID:-}
+      ADMOB_ANDROID_APP_ID: ${ADMOB_ANDROID_APP_ID:-}
+      ADMOB_IOS_APP_ID: ${ADMOB_IOS_APP_ID:-}
+      ADMOB_REWARDED_ANDROID_ID: ${ADMOB_REWARDED_ANDROID_ID:-}
+      ADMOB_REWARDED_IOS_ID: ${ADMOB_REWARDED_IOS_ID:-}
+      TURN_USER: ${TURN_USER:-}
+      TURN_PASSWORD: ${TURN_PASSWORD:-}
+      VOICE_ICE_SERVERS: ${VOICE_ICE_SERVERS:-}
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+      backend-2:
+        condition: service_healthy
+      backend-3:
+        condition: service_healthy
+      backend-4:
+        condition: service_healthy
     ports:
       - "18081:80"
 
@@ -113,9 +198,10 @@ services:
     build:
       context: ./admin-panel
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: always
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "18082:80"
 
@@ -123,13 +209,17 @@ services:
     build:
       context: ./support-panel
       dockerfile: Dockerfile
-    restart: unless-stopped
+    restart: always
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "18083:80"
 
 volumes:
-  pgdata:
-  redisdata:
+  postgres-data:
+    name: ${POSTGRES_VOLUME_NAME:-app_pgdata}
+  redis-data:
+    name: ${REDIS_VOLUME_NAME:-app_redisdata}
   admin_uploads:
+    name: ${ADMIN_UPLOAD_VOLUME_NAME:-app_admin_uploads}

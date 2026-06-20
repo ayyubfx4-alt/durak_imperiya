@@ -1,11 +1,12 @@
-import { h } from '../ui.js';
+﻿import { h } from '../ui.js';
 import { api } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { cardSkinClass, cardSkinStyle } from '../cards.js?v=160-curated-card-skins';
-import { setPref } from '../preferences.js?v=111-encoding-fix';
+import { setPref } from '../preferences.js?v=164-i18n-audio';
 import { native, buyProduct, submitReceiptToBackend } from '../native/capacitor-bridge.js';
+import { t } from '../i18n.js';
 
 let TAB = 'featured';
 let OWNED_FRAME_IDS = new Set();
@@ -44,6 +45,11 @@ const PACK_ICON = {
   'Galaxy Guards': '🌌',
 };
 
+function tSafe(key, fallback) {
+  const value = t(key);
+  return value && value !== key ? value : fallback;
+}
+
 export async function renderShop(root, params = {}) {
   root.innerHTML = '';
 
@@ -60,7 +66,7 @@ export async function renderShop(root, params = {}) {
   wrap.appendChild(renderWallet(me, isPremium));
 
   const body = h('div', { class: 'scroll shop-body' });
-  body.appendChild(h('div', { class: 'shop-loading' }, ['Yuklanmoqda...']));
+  body.appendChild(h('div', { class: 'shop-loading' }, [tSafe('shop.loading', 'Yuklanmoqda...')]));
   wrap.appendChild(h('div', { class: 'shop-layout' }, [
     h('aside', { class: 'shop-side-panel' }, [
       renderTabs(root),
@@ -123,7 +129,7 @@ export async function renderShop(root, params = {}) {
     else if (TAB === 'donations') renderDonations(body, root, donationConfig, me);
   } catch (e) {
     body.innerHTML = '';
-    body.appendChild(h('div', { class: 'shop-empty' }, [e.message || 'Do‘kon yuklanmadi']));
+    body.appendChild(h('div', { class: 'shop-empty' }, [e.message || tSafe('shop.load_failed', 'Do\'kon yuklanmadi')]));
   }
 }
 
@@ -203,7 +209,7 @@ function normalizeCatalog(payload) {
 function renderTopbarLegacy(me) {
   return h('div', { class: 'lobby-topbar shop-topbar' }, [
     h('button', { class: 'btn-icon', onclick: () => { sfx.play('click'); navigate('home'); } }, ['‹']),
-    h('div', { class: 'title' }, ['Do‘kon']),
+    h('div', { class: 'title' }, [tSafe('shop.title', 'Do\'kon')]),
     h('div', { class: 'coins' }, [`$${fmt(me.coins || 0)}`]),
   ]);
 }
@@ -212,7 +218,7 @@ function renderTopbar(me) {
   return h('div', { class: 'lobby-topbar shop-topbar' }, [
     h('button', { class: 'btn-icon', onclick: () => { sfx.play('click'); navigate('home'); } }, ['‹']),
     h('div', { class: 'shop-title-wrap' }, [
-      h('div', { class: 'title' }, ['Shop']),
+      h('div', { class: 'title' }, [tSafe('shop.title', 'Shop')]),
       h('small', {}, ['Durak Imperia']),
     ]),
     h('div', { class: 'shop-top-balances' }, [
@@ -224,9 +230,9 @@ function renderTopbar(me) {
 
 function renderWallet(me, isPremium) {
   return h('div', { class: 'shop-wallet' }, [
-    walletPill('⚡', `${fmt(me.gold_coins || 0)} GC`, 'Gold Coin'),
-    walletPill('$', fmt(me.coins || 0), 'Durak Dollar'),
-    walletPill(isPremium ? '★' : '☆', isPremium ? 'Premium' : 'Oddiy', premiumUntilText(me.premium_until)),
+    walletPill('⚡', `${fmt(me.gold_coins || 0)} GC`, tSafe('shop.gold_coins', 'Gold Coin')),
+    walletPill('$', fmt(me.coins || 0), tSafe('shop.dollars', 'Durak Dollar')),
+    walletPill(isPremium ? '★' : '☆', isPremium ? tSafe('shop.premium', 'Premium') : tSafe('shop.ordinary', 'Oddiy'), premiumUntilText(me.premium_until)),
   ]);
 }
 
@@ -260,15 +266,15 @@ function renderTabsLegacy(root) {
 
 function renderTabs(root) {
   const tabs = [
-    ['featured', '★', 'Tavsiya'],
-    ['gold', 'GC', 'Gold Coin'],
-    ['premium', '♛', 'Premium'],
-    ['cards', 'A♠', 'Kartalar'],
-    ['stickers', '3D', 'Stiker'],
-    ['emoji', '☺', 'Emoji'],
-    ['frames', '◎', 'Profil'],
-    ['dollars', '$', 'Dollar almashish'],
-    ['donations', '+', 'Donat'],
+    ['featured', '★', tSafe('shop.featured', 'Tavsiya')],
+    ['gold', 'GC', tSafe('shop.gold_coins', 'Gold Coin')],
+    ['premium', '♛', tSafe('shop.premium', 'Premium')],
+    ['cards', 'A♠', tSafe('shop.cards', 'Kartalar')],
+    ['stickers', '3D', tSafe('shop.stickers', 'Stiker')],
+    ['emoji', '☺', tSafe('shop.emoji', 'Emoji')],
+    ['frames', '◎', tSafe('shop.frames', 'Profil')],
+    ['dollars', '$', tSafe('shop.dollars_exchange', 'Dollar almashish')],
+    ['donations', '+', tSafe('shop.donations', 'Donat')],
   ];
   const el = h('div', { class: 'shop-tabs' });
   for (const [key, icon, label] of tabs) {
@@ -282,12 +288,12 @@ function renderTabs(root) {
 
 function renderSideOffer(root) {
   return h('div', { class: 'shop-side-offer' }, [
-    h('small', {}, ['Maxsus taklif']),
+    h('small', {}, [tSafe('shop.special_offer', 'Maxsus taklif')]),
     h('strong', {}, ['Legendary Pack']),
-    h('p', {}, ['Gold Coin, premium va donat imkoniyatlari bitta vitrinda.']),
+    h('p', {}, [tSafe('shop.side_offer_text', 'Gold Coin, premium va donat imkoniyatlari bitta vitrinda.')]),
     h('button', {
       onclick: () => { sfx.play('click'); TAB = 'donations'; renderShop(root); },
-    }, ['Donat qilish']),
+    }, [tSafe('shop.donate_button', 'Donat qilish')]),
   ]);
 }
 
@@ -901,7 +907,7 @@ function renderStickerPackStore(root, packs, me, isPremium) {
       h('div', {}, [
         h('small', {}, ['Premium sticker store']),
         h('h2', {}, ['Sticker to\'plamlari']),
-        h('p', {}, ['Har bir pack ichida bir xil mavzudagi 8 ta katta sticker bor.']),
+        h('p', {}, ['Har bir pack ichida o‘z mavzusidagi katta sticker rasmlar bor.']),
       ]),
       h('div', { class: 'premium-sticker-wallet' }, [
         h('b', {}, [`${fmt(me.gold_coins || 0)} GC`]),
@@ -959,7 +965,7 @@ function renderStickerFace(sticker, index) {
   const img = typeof sticker === 'string' ? sticker : sticker?.img;
   return h('span', {
     class: 'premium-sticker-face',
-    style: `--tilt:${index % 2 ? '4deg' : '-3deg'}`,
+    'data-slot': String(index + 1),
   }, [
     h('img', {
       src: img || '',
@@ -972,9 +978,13 @@ function renderStickerFace(sticker, index) {
 
 function stickerPackFaces(pack) {
   const source = Array.isArray(pack.preview) && pack.preview.length ? pack.preview : (Array.isArray(pack.stickers) ? pack.stickers : []);
-  const faces = source.slice(0, 8);
-  while (faces.length < 8 && pack.id) {
-    faces.push({ img: `/stickers/${pack.id}/${faces.length + 1}.svg`, name: `${pack.name || 'Sticker'} ${faces.length + 1}` });
+  const faces = source.filter(Boolean).slice(0, 8);
+  if (!faces.length) return faces;
+  while (faces.length < 8) {
+    const last = faces[faces.length - 1];
+    faces.push(typeof last === 'string'
+      ? last
+      : { ...last, name: last?.name || `${pack.name || 'Sticker'} ${faces.length + 1}` });
   }
   return faces;
 }
@@ -1104,7 +1114,16 @@ function tile({ icon, title, rarity, badges, price, disabled, onClick, cardPrevi
     ])
     : stickerPreview
       ? h('div', { class: `shop-sticker-preview theme-${stickerPreview.theme}` }, [
-        h('div', { class: 'sticker-cover-main' }, [stickerPreview.cover]),
+        h('div', { class: 'sticker-cover-main' }, [
+          stickerPreview.coverImg
+            ? h('img', {
+              src: stickerPreview.coverImg,
+              alt: title || 'Sticker',
+              loading: 'lazy',
+              onerror: (e) => { e.currentTarget.style.display = 'none'; },
+            })
+            : stickerPreview.cover,
+        ]),
         h('div', { class: 'sticker-cover-strip' }, stickerPreview.items.map((item) => h('span', { class: 'sticker-mini' }, [
           h('img', {
             src: item.img,
@@ -1181,6 +1200,7 @@ function stickerPreview(pack) {
   const preview = Array.isArray(pack.preview) && pack.preview.length ? pack.preview : (pack.stickers || []).slice(0, 4);
   return {
     ...meta,
+    coverImg: preview[0]?.img || '',
     items: meta.items.map((label, idx) => ({
       label,
       img: preview[idx]?.img || `/stickers/${pack.id}/${idx + 1}.svg`,

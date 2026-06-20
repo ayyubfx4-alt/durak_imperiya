@@ -9,8 +9,39 @@ import { query, withTransaction } from '../db.js';
 import { STICKER_PACKS, STICKER_PACK_BY_ID, findStickerById } from '../data/stickerPacks.js';
 import { getRegistry } from '../game/socketRegistry.js';
 import { logger } from '../logger.js';
+import { stickerGiftableCopies } from '../services/giftEligibility.js';
 
 export const stickersRouter = Router();
+
+const STICKER_SEND_COOLDOWN_MS = 4000;
+const routeStickerCooldown = new Map();
+
+function normalizeRoomCode(value) {
+  return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
+}
+
+function markRouteStickerCooldown(userId, roomCode) {
+  const now = Date.now();
+  const key = `${roomCode}:${userId}`;
+  const last = routeStickerCooldown.get(key) || 0;
+  if (now - last < STICKER_SEND_COOLDOWN_MS) return false;
+  routeStickerCooldown.set(key, now);
+  if (routeStickerCooldown.size > 1000) {
+    for (const [cooldownKey, timestamp] of routeStickerCooldown) {
+      if (now - timestamp > 60_000) routeStickerCooldown.delete(cooldownKey);
+    }
+  }
+  return true;
+}
+
+function markRoomStickerCooldown(room, userId) {
+  const now = Date.now();
+  room._stickerCooldown = room._stickerCooldown || new Map();
+  const last = room._stickerCooldown.get(userId) || 0;
+  if (now - last < STICKER_SEND_COOLDOWN_MS) return false;
+  room._stickerCooldown.set(userId, now);
+  return true;
+}
 
 function adminStickerPackId(uniqueId) {
   return `admin_${String(uniqueId || '').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
@@ -83,6 +114,33 @@ stickersRouter.get('/packs', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+stickersRouter.get('/free', async (_req, res, next) => {
+  try {
+    const adminPacks = await getAdminStickerPacks();
+    const freeStatic = STICKER_PACKS
+      .filter((p) => Number(p.priceGold || 0) <= 0 && !p.premium)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        tag: p.tag,
+        rarity: p.rarity,
+        premium: false,
+        priceGold: 0,
+        size: p.size,
+        themeColor: p.themeColor,
+        themeGlow: p.themeGlow,
+        panelColor: p.panelColor,
+        owned: 1,
+        stickers: p.stickers,
+        preview: p.stickers.slice(0, 8),
+      }));
+    const freeAdmin = adminPacks
+      .filter((p) => Number(p.priceGold || 0) <= 0 && !p.premium)
+      .map((p) => ({ ...p, priceGold: 0, owned: 1, preview: p.stickers }));
+    res.json([...freeStatic, ...freeAdmin]);
+  } catch (err) { next(err); }
+});
+
 stickersRouter.get('/me', authRequired, async (req, res, next) => {
   try {
     const r = await query(
@@ -92,18 +150,26 @@ stickersRouter.get('/me', authRequired, async (req, res, next) => {
     );
     const owned = new Map(r.rows.map((row) => [row.item_id, Number(row.quantity)]));
     const adminPacks = await getAdminStickerPacks();
+    const giftable = new Map();
+    await Promise.all(r.rows.map(async (row) => {
+      giftable.set(row.item_id, await stickerGiftableCopies(req.user.id, row.item_id, Number(row.quantity || 0)));
+    }));
     const list = [
       ...STICKER_PACKS.map((p) => ({
       id: p.id, name: p.name, tag: p.tag, rarity: p.rarity, premium: p.premium,
       priceGold: p.priceGold, themeColor: p.themeColor,
       themeGlow: p.themeGlow, panelColor: p.panelColor,
       size: p.size,
+      total: p.size,
       owned: owned.get(p.id) || 0,
+      giftable: giftable.get(p.id) || 0,
       stickers: p.stickers,
+      preview: p.stickers.slice(0, 8),
       })),
       ...adminPacks.map((p) => ({
         ...p,
         owned: owned.get(p.id) || 0,
+        giftable: giftable.get(p.id) || 0,
       })),
     ];
     res.json(list);
@@ -162,7 +228,7 @@ stickersRouter.post('/buy', authRequired, async (req, res, next) => {
 stickersRouter.post('/send', authRequired, async (req, res, next) => {
   try {
     const stickerId = String(req.body?.stickerId || '');
-    const roomCode = String(req.body?.roomCode || '');
+    const roomCode = normalizeRoomCode(req.body?.roomCode);
     if (!stickerId || !roomCode) return res.status(400).json({ error: 'stickerId and roomCode required' });
     const found = findStickerById(stickerId) || await findAdminStickerById(stickerId);
     if (!found) return res.status(404).json({ error: 'sticker not found' });
@@ -176,24 +242,29 @@ stickersRouter.post('/send', authRequired, async (req, res, next) => {
     }
     // Broadcast to the room
     const { io, manager } = getRegistry();
+    if (!io) return res.status(503).json({ error: 'socket server unavailable' });
     const room = manager?.get(roomCode);
-    if (!room) return res.status(404).json({ error: 'room not found' });
-    // Anti-spam: max 1 sticker every 4s per user
-    room._stickerCooldown = room._stickerCooldown || new Map();
-    const last = room._stickerCooldown.get(req.user.id) || 0;
-    if (Date.now() - last < 4000) {
+    // Anti-spam: max 1 sticker every 4s per user. In production the REST
+    // request may hit a different backend than the room owner, so keep a route
+    // fallback instead of dropping the sticker when the local room is absent.
+    const allowed = room
+      ? markRoomStickerCooldown(room, req.user.id)
+      : markRouteStickerCooldown(req.user.id, roomCode);
+    if (!allowed) {
       return res.status(429).json({ error: 'too fast' });
     }
-    room._stickerCooldown.set(req.user.id, Date.now());
-    io.to(`room:${roomCode}`).emit('sticker:show', {
+    const payload = {
+      roomCode,
       senderId: req.user.id,
       senderName: req.user.username,
       stickerId,
       packId: found.pack.id,
       img: found.sticker.img,
+      durationMs: 2200,
       ts: Date.now(),
-    });
-    res.json({ ok: true });
+    };
+    io.to(`room:${roomCode}`).emit('sticker:show', payload);
+    res.json({ ok: true, sticker: payload });
   } catch (err) {
     logger.warn('sticker send failed:', err.message);
     next(err);

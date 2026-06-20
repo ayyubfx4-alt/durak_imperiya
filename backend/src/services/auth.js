@@ -12,6 +12,7 @@ const registerSchema = z.object({
   email: z.string().email().optional().nullable(),
   password: z.string().min(8).max(128),
   referralCode: z.string().max(16).optional().nullable(),
+  countryCode: z.string().regex(/^[A-Z]{2}$/).optional().nullable(),
 });
 
 const loginSchema = z.object({
@@ -41,11 +42,11 @@ export async function register(body) {
     if (!c.rows[0]) break;
   }
   const r = await query(
-    `INSERT INTO users (username, nickname, nickname_set, email, password_hash, referral_code, coins, gold_coins)
-     VALUES ($1::text, $1::text, TRUE, $2::text, $3::text, $4::text, $5, $6)
+    `INSERT INTO users (username, nickname, nickname_set, email, password_hash, referral_code, coins, gold_coins, country_code)
+     VALUES ($1::text, $1::text, TRUE, $2::text, $3::text, $4::text, $5, $6, $7)
      RETURNING id, username, nickname, nickname_set, email, coins, gold_coins, games_played,
-               premium_until, referral_code, is_admin, locale, selected_skin, selected_avatar_frame, badges_showcase`,
-    [data.username, data.email || null, passwordHash, code, STARTING_PLAYER_COINS, STARTING_PLAYER_GOLD_COINS]
+               premium_until, referral_code, is_admin, locale, country_code, selected_skin, selected_avatar_frame, badges_showcase`,
+    [data.username, data.email || null, passwordHash, code, STARTING_PLAYER_COINS, STARTING_PLAYER_GOLD_COINS, data.countryCode || null]
   );
   const user = { ...r.rows[0], display_name: r.rows[0].username, avatar_url: null };
 
@@ -62,7 +63,7 @@ export async function login(body) {
   const r = await query(
     `SELECT id, username, nickname, nickname_set, email, password_hash,
             coins, gold_coins, games_played, premium_until, referral_code, is_admin,
-            is_banned, locale, selected_skin, selected_avatar_frame, badges_showcase, avatar_url
+            is_banned, locale, country_code, selected_skin, selected_avatar_frame, badges_showcase, avatar_url
        FROM users
        WHERE lower(username) = lower($1)
           OR lower(nickname) = lower($1)
@@ -100,7 +101,7 @@ export async function guestLogin() {
     `INSERT INTO users (username, nickname, nickname_set, email, password_hash, referral_code, coins, gold_coins)
      VALUES ($1, $2, TRUE, NULL, NULL, $3, $4, $5)
      RETURNING id, username, nickname, nickname_set, email, coins, gold_coins, games_played,
-               premium_until, referral_code, is_admin, locale, selected_skin, selected_avatar_frame, badges_showcase`,
+               premium_until, referral_code, is_admin, locale, country_code, selected_skin, selected_avatar_frame, badges_showcase`,
     [username, username, refCode, STARTING_PLAYER_COINS, STARTING_PLAYER_GOLD_COINS]
   );
   const user = {

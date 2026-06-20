@@ -1,4 +1,4 @@
-﻿// Game table — PREMIUM Royal Card Room (rasm 1 ga aniq mos)
+// Game table — PREMIUM Royal Card Room (rasm 1 ga aniq mos)
 // Yangi:
 //   - Sound effects (deal/throw/beat/take/win/lose)
 //   - Karta animatsiyalari (deal, throw, beat)
@@ -10,38 +10,150 @@ import { api } from '../api.js';
 import { connectSocket, emitWithAck } from '../socket.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { renderCard, SUIT_GLYPH, SUIT_RED, avatarColorFor, avatarLetter } from '../cards.js?v=160-curated-card-skins';
+import { renderCard, SUIT_GLYPH, SUIT_RED, avatarColorFor, flagEmoji } from '../cards.js?v=160-curated-card-skins';
 import { t } from '../i18n.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { initAI, askAI, isLimitReached, remainingToday } from '../services/aiChat.js?v=44-ai-tournament-rank';
-import { pref, prefValue, vibrate } from '../preferences.js?v=111-encoding-fix';
+import { pref, prefValue, vibrate } from '../preferences.js?v=164-i18n-audio';
 import { completeRoyalLoader, hideRoyalLoader, showRoyalLoader, updateRoyalLoader } from '../royalLoading.js?v=129-royal-loader-clean';
 
-const OPP_POS = { 1: ['top-c'], 2: ['top-l','top-r'], 3: ['top-l','top-c','top-r'], 4: ['top-l','top-c','top-r','top-l'], 5: ['top-l','top-c','top-r','top-l','top-r'] };
+const OPP_POS = {
+  1: ['top-c'],
+  2: ['top-l', 'top-r'],
+  3: ['top-l', 'top-c', 'top-r'],
+  4: ['top-l', 'top-lc', 'top-rc', 'top-r'],
+  5: ['top-l', 'top-lc', 'top-c', 'top-rc', 'top-r'],
+};
 
 const PERKS = [
   { id: 'peek_opponents', label: 'Qo\'llarni ko\'r', icon: '👁', cost: 3 },
   { id: 'peek_next_card', label: 'Keyingi karta', icon: '🃏', cost: 1 },
-  { id: 'best_move_hint', label: 'Maslahat',     icon: '🧠', cost: 1 },
 ];
 
-const REPORT_REASONS = [
-  { id: 'cheating', label: 'Aldash' },
-  { id: 'abuse',    label: 'Haqorat' },
-  { id: 'spam',     label: 'Spam' },
-  { id: 'other',    label: 'Boshqa' },
+const REPORT_REASONS = () => [
+  { id: 'cheating', label: tSafe('game.report_reason_cheating', 'Firibgarlik') },
+  { id: 'abuse',    label: tSafe('game.report_reason_abuse', 'Haqorat') },
+  { id: 'spam',     label: tSafe('game.report_reason_spam', 'Spam') },
+  { id: 'other',    label: tSafe('game.report_reason_other', 'Boshqa') },
 ];
 const DEFAULT_TURN_SECONDS = 30;
-const CARD_THROW_COMMIT_MS = 80;
-const SPEECH = { take: 'Olaman', pass: 'Pas', defended: 'Urdim', attack: 'Mana!' };
+const CARD_THROW_COMMIT_MS = 30;  // animatsiya boshlanib server ack ga ulgurish uchun yetarli
+const VOICE_REQUEST_TIMEOUT_MS = 30_000;
+const VOICE_CONNECT_TIMEOUT_MS = 20_000;
+const VOICE_DISCONNECT_GRACE_MS = 10_000;
+// Speech bubble matnlari i18n orqali — til o'zgarganda avtomatik ishlaydi
+const SPEECH_KEYS = { take: 'game.speech_take', pass: 'game.speech_pass', defense: 'game.speech_defense', defended: 'game.speech_defended', attack: 'game.speech_attack' };
+const SPEECH_FALLBACK = { take: 'I take', pass: 'Pass', defense: 'Done', defended: 'Done', attack: 'Done' };
 const CONFETTI_SYMBOLS = ['🎉','⭐','✨','🏆','💫','🎊','🎯','💎'];
 const TIMER_CIRCUMFERENCE = 88;
+const STICKER_BUBBLE_MS = 3000;
+const STICKER_OVERLAY_MS = 2800;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const STARTER_STICKER_PACK = {
+  id: 'pack_starter',
+  name: 'STARTER',
+  tag: 'BEPUL',
+  rarity: 'common',
+  priceGold: 0,
+  owned: 1,
+  themeColor: '#fbbf24',
+  panelColor: 'rgba(35,24,8,.68)',
+  stickers: Array.from({ length: 8 }, (_, i) => ({
+    id: `pack_starter_${i + 1}`,
+    name: `STARTER #${i + 1}`,
+    img: `/stickers/pack_starter/${i + 1}.svg`,
+  })),
+};
+const BASE_EMOJI_ITEMS = ['😀','😂','🤔','😎','😡','🥳','👍','👎','❤️','🔥','💯','🎉','🎴','♠','♥','♦','♣','🏆'];
 
-function applyFanLayout(handEl) {
+function voiceIceServers() {
+  const fallback = [{ urls: 'stun:stun.l.google.com:19302' }];
+  const raw = window.__DURAK_ICE_SERVERS__;
+  if (!raw) return fallback;
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) && parsed.length ? parsed : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function tSafe(key, fallback, vars = {}) {
+  let value = t(key);
+  const text = String(value || '');
+  if (!text || text === key || text.toLowerCase() === key.toLowerCase() || /^[a-z0-9_]+\.[a-z0-9_]+$/i.test(text)) value = fallback;
+  return String(value).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
+}
+
+function withStarterStickerPack(packs = []) {
+  const byId = new Map([[STARTER_STICKER_PACK.id, { ...STARTER_STICKER_PACK }]]);
+  for (const pack of packs || []) {
+    if (!pack?.id) continue;
+    const previous = byId.get(pack.id) || {};
+    byId.set(pack.id, {
+      ...previous,
+      ...pack,
+      owned: Math.max(Number(previous.owned || 0), Number(pack.owned || 0), Number(pack.priceGold || 0) === 0 ? 1 : 0),
+      stickers: Array.isArray(pack.stickers) && pack.stickers.length ? pack.stickers : previous.stickers,
+    });
+  }
+  return Array.from(byId.values());
+}
+
+function emojiText(item = {}, fallback = '😀') {
+  return String(item.glyph || item.value || item.label || item.name || fallback);
+}
+
+function ownedEmojiItemsFromGrouped(payload) {
+  const sections = Array.isArray(payload?.emoji) ? payload.emoji : [];
+  const out = [];
+  const seen = new Set(BASE_EMOJI_ITEMS);
+  for (const section of sections) {
+    const ownedIds = new Set((section.owned || []).map((item) => String(item.emojiId || item.id || '')));
+    const packEmoji = Array.isArray(section.emoji) ? section.emoji : [];
+    const source = packEmoji.length
+      ? packEmoji.filter((item) => !ownedIds.size || ownedIds.has(String(item.id)))
+      : (Array.isArray(section.preview) ? section.preview : []);
+    for (const item of source.slice(0, 30)) {
+      const label = emojiText(item, section.icon || section.name || '😀');
+      const key = `${section.packId}:${item.id || label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        label,
+        title: item.name || item.label || section.name || label,
+        img: item.img || item.imageUrl || '',
+      });
+    }
+    if (!source.length && section.icon) {
+      const key = `${section.packId}:icon`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ label: section.icon, title: section.name || section.icon });
+      }
+    }
+  }
+  return out;
+}
+
+function applyFanLayout(handEl, opts = {}) {
   const cards = Array.from(handEl.querySelectorAll('.card'));
   const n = cards.length;
   if (n === 0) return;
+  const lite = Boolean(opts.lite || isLowPowerRuntime());
+  if (lite) {
+    const overlap = n >= 9 ? 34 : n >= 7 ? 28 : 22;
+    cards.forEach((card, i) => {
+      const angle = n > 1 ? (i - (n - 1) / 2) * 3.2 : 0;
+      const lift = Math.abs(angle) * 0.8;
+      if (!card.classList.contains('selected') && !card.classList.contains('dragging') && !card.classList.contains('fly-to-table')) {
+        card.style.transform = `rotate(${angle}deg) translateY(${lift}px)`;
+      }
+      card.style.marginLeft = i === 0 ? '0' : `-${overlap}px`;
+      card.style.zIndex = String(i);
+    });
+    return;
+  }
   const handWidth = handEl.getBoundingClientRect?.().width || window.innerWidth || 360;
   const cardWidth = cards[0]?.getBoundingClientRect?.().width || 76;
   const maxSpread = n > 1
@@ -88,57 +200,128 @@ function formatGameMoney(amount = 0) {
   return n >= 1000 ? `${Math.round(n / 100) / 10}K` : String(n);
 }
 
+function isLowPowerRuntime() {
+  const cores = Number(navigator.hardwareConcurrency || 8);
+  const memory = Number(navigator.deviceMemory || 4);
+  const reduceMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  return reduceMotion || cores <= 4 || memory <= 2;
+}
+
 function dropWinnerConfetti() {
   const container = document.body;
-  for (let i = 0; i < 24; i++) {
+  const lite = isLowPowerRuntime();
+  const count = lite ? 8 : 24;
+  for (let i = 0; i < count; i++) {
     const el = document.createElement('div');
     el.className = 'fall-emoji';
     el.textContent = CONFETTI_SYMBOLS[Math.floor(Math.random() * CONFETTI_SYMBOLS.length)];
     el.style.left = `${Math.random() * 100}%`;
-    el.style.fontSize = `${24 + Math.random() * 24}px`;
-    el.style.animationDuration = `${1.6 + Math.random() * 1.2}s`;
-    el.style.animationDelay = `${Math.random() * 0.9}s`;
+    el.style.fontSize = `${(lite ? 20 : 24) + Math.random() * (lite ? 12 : 24)}px`;
+    el.style.animationDuration = `${(lite ? 1.2 : 1.6) + Math.random() * (lite ? 0.5 : 1.2)}s`;
+    el.style.animationDelay = `${Math.random() * (lite ? 0.25 : 0.9)}s`;
     container.appendChild(el);
-    setTimeout(() => el.remove(), 4000);
+    setTimeout(() => el.remove(), lite ? 2400 : 4000);
   }
 }
 
-/** Qaysi kartalar berilgan attackni urishi mumkin */
-function highlightableCards(view, me) {
-  if (!view || !me?.hand) return new Set();
-  const result = new Set();
-  const isDefender = view.players[view.defenderIdx]?.id === me.id;
-  const isAttacker = view.players[view.attackerIdx]?.id === me.id;
+function highlightableCards(_view, _me) {
+  return new Set();
+}
 
-  if (isDefender && view.phase === 'defending') {
-    // Topmost unbeaten attack
-    let open = null;
-    for (let i = view.table.length - 1; i >= 0; i--) {
-      if (!view.table[i].defense) { open = view.table[i]; break; }
-    }
-    if (!open?.attack || open.attack.faceDown) return result;
-    const att = open.attack;
-    for (const c of me.hand) {
-      // beats logic mirror of engine.beats
-      if (c.suit === att.suit && c.value > att.value) result.add(c.rank + c.suit);
-      else if (c.suit === view.trumpSuit && att.suit !== view.trumpSuit) result.add(c.rank + c.suit);
-      else if (view.transferEnabled && view.table.every((t) => !t.defense) && c.rank === att.rank) result.add(c.rank + c.suit);
-    }
-  } else if ((isAttacker || view.throwInMode === 'all') && view.phase === 'attacking') {
-    if (view.table.length === 0) {
-      // Birinchi karta — har qanday
-      for (const c of me.hand) result.add(c.rank + c.suit);
-    } else {
-      // Stol ustidagi ranklar bilan mos
-      const ranks = new Set();
-      for (const t of view.table) {
-        if (t.attack && !t.faceDown) ranks.add(t.attack.rank);
-        if (t.defense) ranks.add(t.defense.rank);
-      }
-      for (const c of me.hand) if (ranks.has(c.rank)) result.add(c.rank + c.suit);
-    }
+function canAttemptCardPlay(view, me) {
+  if (!view || !me || view.phase === 'ended') return false;
+  const isDefender = view.phase === 'defending' && view.players?.[view.defenderIdx]?.id === me.id;
+  const isAttacker = view.phase === 'attacking' && (
+    view.players?.[view.attackerIdx]?.id === me.id ||
+    (view.throwInMode === 'all' && view.players?.[view.defenderIdx]?.id !== me.id)
+  );
+  return isDefender || isAttacker;
+}
+
+function displayGameName(player) {
+  const flag = flagEmoji(player?.country_code);
+  let name = player?.nickname ? `@${player.nickname}` : (player?.username || '');
+  if (String(player?.id || '').startsWith('bot-')) {
+    name = DEMO_BOT_NAMES[hashString(player.id || player.username) % DEMO_BOT_NAMES.length] || name;
   }
-  return result;
+  return flag ? `${flag} ${name}` : name;
+}
+
+const DEMO_BOT_NAMES = [
+  'Andre', 'Elena', 'Marco', 'Sophie', 'Lucas', 'Mila', 'Daniel', 'Emma',
+  'Oliver', 'Nora', 'Victor', 'Amelia', 'Max', 'Eva', 'Leo', 'Anna',
+  'Henry', 'Luna', 'Oscar', 'Chloe', 'Mason', 'Iris', 'Theo', 'Grace',
+];
+
+const DEMO_AVATAR_PALETTES = [
+  ['#4f46e5', '#dbeafe', '#111827'],
+  ['#16a34a', '#dcfce7', '#3b2414'],
+  ['#b45309', '#fff7ed', '#1f2937'],
+  ['#be123c', '#ffe4e6', '#0f172a'],
+  ['#0891b2', '#cffafe', '#3f2d1b'],
+  ['#7c3aed', '#ede9fe', '#111827'],
+  ['#475569', '#e2e8f0', '#2f1f16'],
+  ['#ca8a04', '#fef9c3', '#1f2937'],
+];
+
+function hashString(value = '') {
+  let hash = 0;
+  const text = String(value || 'player');
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  return Math.abs(hash);
+}
+
+function makeAvatarFace(player = {}) {
+  const seed = hashString(player.id || player.username || player.nickname || 'player');
+  const palette = DEMO_AVATAR_PALETTES[seed % DEMO_AVATAR_PALETTES.length];
+  return h('span', {
+    class: `demo-avatar-face face-${seed % 6}`,
+    style: {
+      '--avatar-bg': palette[0],
+      '--avatar-skin': palette[1],
+      '--avatar-hair': palette[2],
+    },
+  }, [
+    h('i', { class: 'face-hair' }, []),
+    h('b', { class: 'face-eyes' }, []),
+    h('em', { class: 'face-smile' }, []),
+  ]);
+}
+
+function gameAvatarSrc(player = {}) {
+  return player?.avatar_url || player?.avatarUrl || player?.photo_url || player?.picture || '';
+}
+
+function renderPlayerAvatar(player = {}, { size = 'md', mine = false, title = '', onclick = null, dataPlayer = true } = {}) {
+  const src = gameAvatarSrc(player);
+  const avatar = h('div', {
+    class: `avatar ${size} demo-avatar color-${avatarColorFor(player?.id || player?.username || 'player')}${mine ? ' mine' : ''}`,
+    style: 'position:relative',
+    title,
+    onclick,
+    'data-player-id': dataPlayer ? (player?.id || '') : undefined,
+  }, [
+    src
+      ? h('img', {
+        src,
+        alt: displayGameName(player) || 'avatar',
+        loading: 'lazy',
+        decoding: 'async',
+        draggable: false,
+        onerror: (e) => {
+          const parent = e.currentTarget.parentElement;
+          e.currentTarget.remove();
+          parent?.appendChild(makeAvatarFace(player));
+        },
+      })
+      : makeAvatarFace(player),
+  ]);
+  return avatar;
+}
+
+function cardWireId(card) {
+  if (!card) return '';
+  return `${card.rank}${card.suit}`;
 }
 
 export async function renderGame(root, params) {
@@ -151,8 +334,17 @@ export async function renderGame(root, params) {
   const opponent = cachedLoaderView?.players?.find((p) => p.id !== state.user?.id);
   const opponentName = opponent?.nickname || opponent?.username || 'RAQIB';
   const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const lowEndDevice = Number(navigator.hardwareConcurrency || 8) <= 4;
-  const nativeWebView = Boolean(window.Capacitor || window.CapacitorPlugins || window.cordova);
+  const mobileViewport = Math.min(window.innerWidth || 360, window.innerHeight || 640) <= 600;
+  const cpuCores = Number(navigator.hardwareConcurrency || (mobileViewport ? 4 : 8));
+  const deviceMemory = Number(navigator.deviceMemory || (mobileViewport ? 2 : 4));
+  const lowEndDevice = mobileViewport || cpuCores <= 4 || deviceMemory <= 2 || cpuCores <= 6;
+  const nativeWebView = Boolean(
+    window.Capacitor || window.CapacitorPlugins || window.cordova ||
+    window.__DURAK_PERF_LITE__ || window.__capacitor_app__ ||
+    /wv|WebView/i.test(navigator.userAgent)
+  );
+  const forceDisableBlur = Boolean(window.__DURAK_DISABLE_BLUR__ || nativeWebView);
+  const maxNativeFps = Number(window.__DURAK_MAX_FPS__ || (nativeWebView ? 15 : 60));
   const wrap = h('div', {
     class: `screen game-screen royal-table-screen perf-smooth ${reduceMotion || lowEndDevice || nativeWebView ? 'perf-lite' : ''}`,
   });
@@ -165,7 +357,7 @@ export async function renderGame(root, params) {
     subtitle: 'Battle loading',
     status: 'Xona, voice va kartalar tayyorlanmoqda',
     progress: 68,
-    items: ['VOICE', 'CHAT', 'GOLD'],
+    items: ['VOICE', 'STICKER', 'GOLD'],
     players: [myName, opponentName],
   });
 
@@ -181,12 +373,22 @@ export async function renderGame(root, params) {
   api.me().then((fresh) => applyFreshUser(fresh, { rerenderOnSkinChange: true })).catch(() => {});
 
   let view = cachedLoaderView;
+  let lobbyRoom = null;
   if (!code && !view) {
     hideRoyalLoader('game');
-    wrap.appendChild(renderGameError('O\'yin kodi topilmadi. Stollar bo\'limidan qayta kiring.'));
+    wrap.appendChild(renderGameError(tSafe('game.missing_code', 'O\'yin kodi topilmadi. Stollar bo\'limidan qayta kiring.')));
     return () => {};
   }
   let selectedCard = null;
+  let joinPassword = '';
+  try {
+    const pendingCode = String(sessionStorage.getItem('pending_room') || '').trim().toUpperCase();
+    if (pendingCode && pendingCode === String(code || '').trim().toUpperCase()) {
+      joinPassword = sessionStorage.getItem('pending_room_password') || '';
+      sessionStorage.removeItem('pending_room');
+      sessionStorage.removeItem('pending_room_password');
+    }
+  } catch (_) { /* ignore */ }
   let chatOpen = false;
   let stickerOpen = false;
   let reactionsOpen = false;
@@ -194,7 +396,9 @@ export async function renderGame(root, params) {
   const chatLog = [];
   let ownedEmojiCache = null;
   let loadingOwnedEmoji = false;
+  let ownedEmojiError = '';
   let stickerInventoryCache = null;
+  let stickerInventoryCacheAt = 0;
   let stickerInventoryLoading = false;
   let stickerInventoryError = '';
   const liveChat = [];
@@ -202,9 +406,17 @@ export async function renderGame(root, params) {
   const liveChatTimers = new Set();
   const speechByPlayer = {};
   const typingByPlayer = {};
+  const stickerByPlayer = {};
+  let lastStickerOverlayKey = '';
+  let lastStickerOverlayAt = 0;
+  let commandPanelOpen = false;
   let dealingHand = false;
   let confettiShown = false;
   let timerInterval = null;
+  let pregameReadyDeadline = 0;
+  let pregameReadyTimer = null;
+  let pregameReadyTicker = null;
+  let pregameReadyKey = '';
   let loadingWatchdog = null;
   let lastTableSize = 0;
   let warnedTimeout = false;
@@ -214,6 +426,7 @@ export async function renderGame(root, params) {
   let renderTimer = null;
   let lastRenderAt = 0;
   let gameLoaderDone = false;
+  let readyChanging = false;
   let onRuntimePrefChange = null;
   let timerNodeCache = [];
   let timerCacheAt = 0;
@@ -225,38 +438,141 @@ export async function renderGame(root, params) {
   let voiceState = 'idle'; // idle | requesting | active
   let voicePeer = null;    // RTCPeerConnection
   let localStream = null;  // getUserMedia stream
+  let pendingVoiceIce = [];
+  let voiceRequestTimer = null;
+  let voiceConnectTimer = null;
+  let voiceDisconnectTimer = null;
+  let actionConfirmModal = null;
 
-  async function stopVoice() {
+  function clearVoiceTimers() {
+    if (voiceRequestTimer) clearTimeout(voiceRequestTimer);
+    if (voiceConnectTimer) clearTimeout(voiceConnectTimer);
+    if (voiceDisconnectTimer) clearTimeout(voiceDisconnectTimer);
+    voiceRequestTimer = null;
+    voiceConnectTimer = null;
+    voiceDisconnectTimer = null;
+  }
+
+  function removeVoiceRequestModal() {
+    const existing = document.getElementById('voice-request-modal');
+    if (existing) existing.remove();
+  }
+
+  function removeVoiceAudio() {
+    const el = document.getElementById('voice-remote-audio');
+    if (el) {
+      try { el.srcObject = null; } catch (_) {}
+      el.remove();
+    }
+  }
+
+  function stopVoice({ emitEnd = false, notify = false, message = 'Ovozli chat tugatildi' } = {}) {
+    const hadVoice = voiceState !== 'idle'
+      || !!voicePeer
+      || !!localStream
+      || pendingVoiceIce.length > 0
+      || !!document.getElementById('voice-request-modal');
+    clearVoiceTimers();
+    removeVoiceRequestModal();
+    removeVoiceAudio();
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-    if (voicePeer) { voicePeer.close(); voicePeer = null; }
+    if (voicePeer) {
+      const pc = voicePeer;
+      voicePeer = null;
+      try {
+        pc.ontrack = null;
+        pc.onicecandidate = null;
+        pc.onconnectionstatechange = null;
+        pc.oniceconnectionstatechange = null;
+        pc.close();
+      } catch (_) {}
+    }
+    pendingVoiceIce = [];
     voiceState = 'idle';
+    if (emitEnd && hadVoice) socket.emit('voice:end', { code, reason: 'client-cleanup' });
+    if (notify && hadVoice) toast(message, 'info');
     scheduleRender();
+  }
+
+  async function flushPendingVoiceIce() {
+    if (!voicePeer || !voicePeer.remoteDescription) return;
+    const queue = pendingVoiceIce;
+    pendingVoiceIce = [];
+    for (const candidate of queue) {
+      try { await voicePeer.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
+    }
+  }
+
+  function watchVoiceConnection(pc) {
+    const check = () => {
+      if (pc !== voicePeer) return;
+      const stateNow = pc.connectionState || pc.iceConnectionState || '';
+      const iceNow = pc.iceConnectionState || '';
+      if (stateNow === 'connected' || stateNow === 'completed' || iceNow === 'connected' || iceNow === 'completed') {
+        if (voiceConnectTimer) clearTimeout(voiceConnectTimer);
+        if (voiceDisconnectTimer) clearTimeout(voiceDisconnectTimer);
+        voiceConnectTimer = null;
+        voiceDisconnectTimer = null;
+        return;
+      }
+      if (stateNow === 'failed' || iceNow === 'failed') {
+        toast('Ovozli ulanish uzildi', 'error');
+        stopVoice({ emitEnd: true });
+        return;
+      }
+      if ((stateNow === 'disconnected' || iceNow === 'disconnected') && !voiceDisconnectTimer) {
+        voiceDisconnectTimer = setTimeout(() => {
+          voiceDisconnectTimer = null;
+          if (pc === voicePeer && (pc.connectionState === 'disconnected' || pc.iceConnectionState === 'disconnected')) {
+            toast('Ovozli ulanish qayta tiklanmadi', 'error');
+            stopVoice({ emitEnd: true });
+          }
+        }, VOICE_DISCONNECT_GRACE_MS);
+      }
+    };
+    pc.onconnectionstatechange = check;
+    pc.oniceconnectionstatechange = check;
   }
 
   async function startVoiceCall(initiator) {
     try {
+      clearVoiceTimers();
       localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch (_) {
-      toast('Mikrofon ruxsati berilmadi', 'error'); voiceState = 'idle'; scheduleRender(); return;
-    }
-    const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-    voicePeer = pc;
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    pc.ontrack = (e) => {
-      const audio = document.getElementById('voice-remote-audio') || document.createElement('audio');
-      audio.id = 'voice-remote-audio';
-      audio.autoplay = true;
-      audio.srcObject = e.streams[0];
-      sfx.applyVoiceAudio?.(audio);
-      document.body.appendChild(audio);
-    };
-    pc.onicecandidate = (e) => {
-      if (e.candidate) socket.emit('voice:ice', { code, candidate: e.candidate });
-    };
-    if (initiator) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socket.emit('voice:offer', { code, offer });
+      const pc = new RTCPeerConnection({ iceServers: voiceIceServers() });
+      voicePeer = pc;
+      voiceState = 'active';
+      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+      pc.ontrack = (e) => {
+        const audio = document.getElementById('voice-remote-audio') || document.createElement('audio');
+        audio.id = 'voice-remote-audio';
+        audio.autoplay = true;
+        audio.playsInline = true;
+        audio.srcObject = e.streams[0];
+        sfx.applyVoiceAudio?.(audio);
+        document.body.appendChild(audio);
+      };
+      pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('voice:ice', { code, candidate: e.candidate });
+      };
+      watchVoiceConnection(pc);
+      voiceConnectTimer = setTimeout(() => {
+        if (pc === voicePeer && pc.connectionState !== 'connected' && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') {
+          toast('Ovozli ulanish ochilmadi. Internet yoki TURN sozlamasini tekshiring.', 'error');
+          stopVoice({ emitEnd: true });
+        }
+      }, VOICE_CONNECT_TIMEOUT_MS);
+      if (initiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('voice:offer', { code, offer });
+      }
+      scheduleRender();
+    } catch (err) {
+      const message = err?.name === 'NotAllowedError'
+        ? 'Mikrofon ruxsati berilmadi'
+        : 'Ovozli chat ochilmadi';
+      toast(message, 'error');
+      stopVoice({ emitEnd: true });
     }
   }
 
@@ -286,10 +602,11 @@ export async function renderGame(root, params) {
   function frameDelayMs() {
     const fpsLimit = Number(prefValue('pref_fps_limit', state.user));
     const preferred = [30, 60, 90, 120].includes(fpsLimit) ? fpsLimit : 60;
-    const maxDomFps = nativeWebView || lowEndDevice ? 30 : 45;
+    const maxDomFps = nativeWebView ? Math.min(maxNativeFps, 15) : lowEndDevice ? 18 : 45;
     const fps = Math.min(preferred, maxDomFps);
     return Math.max(8, Math.round(1000 / fps));
   }
+
 
   function syncGamePerformanceFlags() {
     const graphics = String(prefValue('pref_graphics_quality', state.user) || 'high');
@@ -302,7 +619,7 @@ export async function renderGame(root, params) {
   function finishGameLoader(status = 'O\'yin boshlandi') {
     if (gameLoaderDone) return;
     gameLoaderDone = true;
-    completeRoyalLoader(status, 520, 'game');
+    completeRoyalLoader(status, wrap.classList.contains('perf-lite') ? 180 : 520, 'game');
   }
 
   onRuntimePrefChange = (event) => {
@@ -318,6 +635,114 @@ export async function renderGame(root, params) {
     return String(id || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
+  function selectedCardText(card) {
+    return card ? `${card.rank === 'T' ? '10' : card.rank}${SUIT_GLYPH[card.suit] || ''}` : '';
+  }
+
+  function updatePrimaryActionDom(primary, stateInfo) {
+    if (!primary || !stateInfo) return;
+    primary.className = `demo-primary-action ${stateInfo.key}${stateInfo.enabled ? '' : ' disabled'}`;
+    primary.disabled = !stateInfo.enabled;
+    primary.onclick = stateInfo.onclick;
+    const label = primary.querySelector('strong');
+    if (label) label.textContent = stateInfo.label;
+    let sub = primary.querySelector('small');
+    if (stateInfo.sub) {
+      if (!sub) {
+        sub = document.createElement('small');
+        primary.appendChild(sub);
+      }
+      sub.textContent = stateInfo.sub;
+    } else if (sub) {
+      sub.remove();
+    }
+  }
+
+  function primaryActionState(me) {
+    if (!view || view.phase === 'ended') return null;
+    const canPlay = Boolean(selectedCard && canAttemptCardPlay(view, me));
+    const canTake = isMyTurnDefender(me);
+    const canPass = isMyTurnAttacker(me) && view.table.length > 0;
+    const activePlayer = currentTurnPlayer(view);
+    if (canPlay) {
+      return {
+        key: 'done',
+        label: 'Tashlash',
+        sub: selectedCardText(selectedCard),
+        enabled: true,
+        onclick: () => playCard(selectedCard),
+      };
+    }
+    if (canTake) {
+      return {
+        key: 'take',
+        label: 'Olish',
+        sub: 'Olish',
+        enabled: true,
+        onclick: () => { sfx.play('take'); vibrate(18); emitAction('take'); },
+      };
+    }
+    if (canPass) {
+      return {
+        key: 'pass',
+        label: "O'tkazish",
+        sub: 'Tugadi',
+        enabled: true,
+        onclick: () => emitAction('pass'),
+      };
+    }
+    if (isMyTurnAttacker(me) || isMyTurnDefender(me)) {
+      return {
+        key: 'turn',
+        label: 'Sizning navbat',
+        sub: 'Karta tanlang',
+        enabled: false,
+        onclick: () => toast(tSafe('game.select_card_first', 'Avval yuradigan kartani tanlang'), 'info'),
+      };
+    }
+    return {
+      key: 'waiting',
+      label: 'Kutilmoqda',
+      sub: activePlayer ? displayGameName(activePlayer) : '',
+      enabled: false,
+      onclick: () => toast(tSafe('game.not_your_turn', 'Sizning navbatingiz emas'), 'info'),
+    };
+  }
+
+  function updateSelectedCardDom() {
+    if (!view) return false;
+    const me = view.players?.find((p) => p.hand);
+    const selectedId = cardWireId(selectedCard);
+    const handCards = wrap.querySelectorAll('.my-hand .card');
+    if (!handCards.length) return false;
+    handCards.forEach((el) => {
+      el.classList.toggle('selected', Boolean(selectedId && el.dataset.cardId === selectedId));
+    });
+    const canPlay = Boolean(selectedCard && canAttemptCardPlay(view, me));
+    updatePrimaryActionDom(wrap.querySelector('.demo-primary-action'), primaryActionState(me));
+    const hit = wrap.querySelector('.royal-table-action.hit');
+    if (hit) {
+      hit.classList.toggle('disabled', !canPlay);
+      hit.onclick = () => canPlay
+        ? playCard(selectedCard)
+        : toast(tSafe('game.select_card_first', 'Avval yuradigan kartani tanlang'), 'info');
+    }
+    const bluff = wrap.querySelector('.royal-table-action.bluff');
+    if (bluff) {
+      const canBluffNow = Boolean(view.bluffEnabled && selectedCard && isMyTurnAttacker(me));
+      bluff.classList.toggle('disabled', !canBluffNow);
+      bluff.onclick = () => canBluffNow
+        ? bluffAttack(selectedCard)
+        : toast('Bluff uchun avval kartani tanlang', 'info');
+    }
+    return true;
+  }
+
+  function selectCardFast(card) {
+    selectedCard = card;
+    if (!updateSelectedCardDom()) scheduleRender({ immediate: true });
+  }
+
   function makeTypingBubble() {
     return h('div', { class: 'typing-bubble dynamic-ephemeral' }, [
       h('span', {}, []), h('span', {}, []), h('span', {}, []),
@@ -325,8 +750,18 @@ export async function renderGame(root, params) {
   }
 
   function makeSpeechBubble(playerId) {
-    return h('div', { class: 'speech dynamic-ephemeral' }, [
-      SPEECH[speechByPlayer[playerId]] || speechByPlayer[playerId],
+    const kind = speechByPlayer[playerId];
+    // i18n kaliti bo'lsa tarjima qilamiz, aks holda emoji/raw string ko'rsatamiz
+    const text = SPEECH_KEYS[kind] ? (SPEECH_FALLBACK[kind] || kind || '') : (kind || '');
+    const looksLikeEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(String(text || ''));
+    return h('div', { class: `speech dynamic-ephemeral${looksLikeEmoji ? ' emoji-speech' : ''}` }, [text]);
+  }
+
+  function makeStickerBubble(playerId) {
+    const sticker = stickerByPlayer[playerId];
+    if (!sticker?.img) return null;
+    return h('div', { class: 'sticker-speech dynamic-ephemeral' }, [
+      h('img', { src: sticker.img, alt: sticker.senderName || 'sticker', loading: 'lazy', decoding: 'async', draggable: false }),
     ]);
   }
 
@@ -336,6 +771,10 @@ export async function renderGame(root, params) {
     host.querySelectorAll('.dynamic-ephemeral').forEach((el) => el.remove());
     if (typingByPlayer[playerId]) host.appendChild(makeTypingBubble());
     if (speechByPlayer[playerId]) host.appendChild(makeSpeechBubble(playerId));
+    if (stickerByPlayer[playerId]) {
+      const bubble = makeStickerBubble(playerId);
+      if (bubble) host.appendChild(bubble);
+    }
   }
 
   let perkReveal = null;
@@ -378,15 +817,123 @@ export async function renderGame(root, params) {
     refreshLiveChatFeed();
   }
 
+  function sameRoomCode(room) {
+    return String(room?.code || '').trim().toUpperCase() === String(code || '').trim().toUpperCase();
+  }
+
+  function stopPregameReadyClock() {
+    if (pregameReadyTimer) clearTimeout(pregameReadyTimer);
+    if (pregameReadyTicker) clearInterval(pregameReadyTicker);
+    pregameReadyTimer = null;
+    pregameReadyTicker = null;
+    pregameReadyDeadline = 0;
+    pregameReadyKey = '';
+  }
+
+  function armPregameReadyClock(room, me, cardsSoon = false) {
+    if (!room || !me || me.ready || cardsSoon) {
+      stopPregameReadyClock();
+      return 0;
+    }
+    const key = `${room.code || code}:${me.id}`;
+    if (pregameReadyKey !== key || !pregameReadyDeadline) {
+      if (pregameReadyTimer) clearTimeout(pregameReadyTimer);
+      if (pregameReadyTicker) clearInterval(pregameReadyTicker);
+      pregameReadyKey = key;
+      pregameReadyDeadline = Date.now() + 30000;
+      pregameReadyTicker = setInterval(() => scheduleRender({ immediate: true }), 1000);
+      pregameReadyTimer = setTimeout(() => {
+        const seatedMe = (lobbyRoom?.seats || []).find((s) => s?.id === state.user?.id);
+        if (seatedMe?.ready) return stopPregameReadyClock();
+        toast('Tayyor bosilmadi. Stol avtomatik tark etildi.', 'info');
+        leavePregame({ quiet: true });
+      }, 30200);
+    }
+    const left = Math.max(0, Math.ceil((pregameReadyDeadline - Date.now()) / 1000));
+    if (left <= 0) {
+      toast('Tayyor bosilmadi. Stol avtomatik tark etildi.', 'info');
+      leavePregame({ quiet: true });
+      return 0;
+    }
+    return left;
+  }
+
+  function setLobbyRoom(room) {
+    if (!room || !sameRoomCode(room) || room.phase !== 'lobby') return;
+    if (loadingWatchdog) { clearTimeout(loadingWatchdog); loadingWatchdog = null; }
+    lobbyRoom = room;
+    state.currentRoom = room;
+    hideRoyalLoader('game');
+    scheduleRender({ immediate: true });
+  }
+
+  function roomSeatCount(room) {
+    return (room?.seats || []).filter(Boolean).length;
+  }
+
+  function leavePregame({ quiet = false } = {}) {
+    stopPregameReadyClock();
+    socket.emit('room:leave', { code });
+    state.currentRoom = null;
+    if (!quiet) sfx.play('click');
+    navigate('home');
+  }
+
+  function toggleReadyFromGame(room, me) {
+    if (!room || !me || readyChanging) return;
+    const nextReady = !me.ready;
+    if (nextReady) stopPregameReadyClock();
+    readyChanging = true;
+    lobbyRoom = {
+      ...room,
+      seats: (room.seats || []).map((s) => (s && s.id === me.id ? { ...s, ready: nextReady } : s)),
+    };
+    socket.emit('room:ready', { code, ready: nextReady });
+    sfx.play('click');
+    vibrate(nextReady ? 18 : 10);
+    scheduleRender({ immediate: true });
+    setTimeout(() => {
+      readyChanging = false;
+      scheduleRender({ immediate: true });
+    }, 500);
+  }
+
   // Socket events
+  function findEphemeralPlayerId(payload = {}) {
+    const direct = payload.playerId || payload.senderId || payload.userId || payload.id;
+    if (direct) return direct;
+    const name = String(payload.senderName || payload.username || payload.name || '').trim().toLowerCase();
+    if (!name) return '';
+    const players = [
+      ...(view?.players || []),
+      ...((lobbyRoom?.seats || []).filter(Boolean)),
+    ];
+    const found = players.find((p) => {
+      const username = String(p?.username || '').toLowerCase();
+      const nickname = String(p?.nickname || '').toLowerCase();
+      return username === name || nickname === name || `@${nickname}` === name;
+    });
+    return found?.id || '';
+  }
+
+  const onRoomState = (room) => setLobbyRoom(room);
   const onChatMessage = (m) => {
+    if (m?.type === 'text') return;
+    const playerId = findEphemeralPlayerId(m);
+    if (pref('pref_emotions', state.user) && playerId && m?.type === 'emoji') {
+      speechByPlayer[playerId] = m.content || m.text || m.emoji || '😀';
+      setTimeout(() => { delete speechByPlayer[playerId]; syncEphemeralFor(playerId); }, 1800);
+      syncEphemeralFor(playerId);
+    }
     chatLog.push(m);
     pushLiveChat(m);
     sfx.play('notification');
-    if (chatOpen) renderChat();
   };
   const onGameStart = (gv) => {
     if (loadingWatchdog) { clearTimeout(loadingWatchdog); loadingWatchdog = null; }
+    stopPregameReadyClock();
+    lobbyRoom = null;
+    readyChanging = false;
     view = gv; state.game = gv; dealingHand = true;
     updateRoyalLoader({ source: 'game', progress: 94, status: 'Kartalar tarqatilmoqda' });
     finishGameLoader('DUEL BOSHLANDI');
@@ -395,14 +942,13 @@ export async function renderGame(root, params) {
     sfx.play('shuffle');
     setTimeout(() => sfx.play('deal'), 200);
     scheduleRender();
-    setTimeout(() => { dealingHand = false; scheduleRender(); }, 1400);
+    setTimeout(() => { dealingHand = false; scheduleRender(); }, wrap.classList.contains('perf-lite') ? 420 : 1400);
   };
   const onGameMove = (gv) => {
     const prevSize = lastTableSize;
     view = gv; state.game = gv;
     timeoutPoked = false;
     if (gv.table.length > prevSize) {
-      sfx.play('cardThrow');
       vibrate(12);
     } else if (gv.table.some(t => t.defense)) {
       // any new defense card
@@ -421,6 +967,7 @@ export async function renderGame(root, params) {
   };
   const onGameEnd = (gv) => {
     view = gv; state.game = gv;
+    stopVoice();
     const me = view.players.find(p => p.hand);
     const winnerId = view.winnerOrder?.[0];
     const payoutByPlayer = new Map((view.payoutShares || []).map((s) => [s.playerId, Number(s.amount || 0)]));
@@ -449,17 +996,27 @@ export async function renderGame(root, params) {
     syncEphemeralFor(playerId);
   };
   // PRO v5: Sticker show overlay
-  const onStickerShow = ({ img, senderName }) => {
+  const onStickerShow = (payload = {}) => {
     if (!pref('pref_emotions', state.user)) return;
-    showStickerOverlay(img, senderName);
+    const payloadRoom = String(payload.roomCode || payload.code || '').trim().toUpperCase();
+    const currentRoom = String(code || '').trim().toUpperCase();
+    if (payloadRoom && currentRoom && payloadRoom !== currentRoom) return;
+    const stickerImg = String(payload.img || '').trim();
+    if (!stickerImg) return;
+    const playerId = findEphemeralPlayerId(payload);
+    if (playerId) {
+      stickerByPlayer[playerId] = { img: stickerImg, senderName: payload.senderName };
+      setTimeout(() => { delete stickerByPlayer[playerId]; syncEphemeralFor(playerId); }, Number(payload.durationMs || STICKER_BUBBLE_MS) + 800);
+      syncEphemeralFor(playerId);
+    }
+    vibrate(14);
+    showStickerOverlay({ ...payload, img: stickerImg });
   };
   const onRoomError = ({ error }) => toast(error || 'Xatolik', 'error');
 
   // ── Feature 30: Voice Chat socket handlers ────────────────────────────────
-  const onVoiceRequest = ({ fromName }) => {
-    // Show incoming voice request dialog
-    const existing = document.getElementById('voice-request-modal');
-    if (existing) existing.remove();
+  const onVoiceRequest = ({ fromName, timeoutMs }) => {
+    removeVoiceRequestModal();
     const bg = document.createElement('div');
     bg.id = 'voice-request-modal';
     bg.className = 'modal-bg';
@@ -479,50 +1036,145 @@ export async function renderGame(root, params) {
       socket.emit('voice:accept', { code }, (res) => {
         if (!res?.ok) return toast(res?.error || 'Ovozli chat ochilmadi', 'error');
         voiceState = 'active';
-        startVoiceCall(false); // answerer
+        startVoiceCall(false);
         scheduleRender();
       });
     };
-    document.getElementById('voice-decline-btn').onclick = () => { bg.remove(); };
-    // Auto-remove after 20s
-    setTimeout(() => bg.isConnected && bg.remove(), 20000);
+    document.getElementById('voice-decline-btn').onclick = () => {
+      bg.remove();
+      socket.emit('voice:reject', { code }, () => {});
+    };
+    const modalTimeout = Math.max(5_000, Math.min(Number(timeoutMs || VOICE_REQUEST_TIMEOUT_MS), VOICE_REQUEST_TIMEOUT_MS));
+    setTimeout(() => {
+      if (!bg.isConnected) return;
+      bg.remove();
+      socket.emit('voice:reject', { code }, () => {});
+    }, modalTimeout);
   };
-
   const onVoiceAccept = async () => {
+    clearVoiceTimers();
     voiceState = 'active';
     scheduleRender();
-    // initiator side — now create and send offer
     if (!voicePeer) await startVoiceCall(true);
   };
-
   const onVoiceOffer = async ({ offer }) => {
-    if (!voicePeer) await startVoiceCall(false);
-    if (voicePeer) {
+    try {
+      if (!voicePeer) await startVoiceCall(false);
+      if (!voicePeer) return;
       await voicePeer.setRemoteDescription(new RTCSessionDescription(offer));
+      await flushPendingVoiceIce();
       const answer = await voicePeer.createAnswer();
       await voicePeer.setLocalDescription(answer);
       socket.emit('voice:answer', { code, answer });
+    } catch (_) {
+      toast('Ovozli ulanish ochilmadi', 'error');
+      stopVoice({ emitEnd: true });
     }
   };
-
   const onVoiceAnswer = async ({ answer }) => {
-    if (voicePeer) await voicePeer.setRemoteDescription(new RTCSessionDescription(answer));
-  };
-
-  const onVoiceIce = async ({ candidate }) => {
-    if (voicePeer && candidate) {
-      try { await voicePeer.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
+    if (!voicePeer) return;
+    try {
+      await voicePeer.setRemoteDescription(new RTCSessionDescription(answer));
+      await flushPendingVoiceIce();
+    } catch (_) {
+      toast('Ovozli ulanish javobi qabul qilinmadi', 'error');
+      stopVoice({ emitEnd: true });
     }
   };
-
-  const onVoiceEnd = () => {
+  const onVoiceIce = async ({ candidate }) => {
+    if (!candidate) return;
+    if (!voicePeer || !voicePeer.remoteDescription) {
+      pendingVoiceIce.push(candidate);
+      return;
+    }
+    try { await voicePeer.addIceCandidate(new RTCIceCandidate(candidate)); } catch (_) {}
+  };
+  const onVoiceReject = () => {
+    stopVoice({ notify: true, message: 'Ovozli chat rad etildi' });
+  };
+  const onVoiceTimeout = () => {
+    stopVoice({ notify: true, message: 'Ovozli chat so‘rovi javobsiz qoldi' });
+  };
+  const onVoiceError = ({ error } = {}) => {
     stopVoice();
-    // Remove remote audio element
-    const el = document.getElementById('voice-remote-audio');
-    if (el) el.remove();
-    toast('Ovozli chat tugatildi', 'info');
+    toast(error || 'Ovozli chat xatosi', 'error');
+  };
+  const onVoiceEnd = ({ reason } = {}) => {
+    const message = reason === 'game-ended' ? 'O‘yin tugadi, ovozli chat yopildi' : 'Ovozli chat tugatildi';
+    stopVoice({ notify: true, message });
   };
 
+  function actionConfirmText(req = {}) {
+    const card = String(req.card || req.payload?.card || '').replace('T', '10');
+    const label = req.actionLabel || ({
+      attack: 'Karta tashlash',
+      defense: 'Kartani urish',
+      transfer: "O'tkazish",
+      take: 'Karta olish',
+    }[req.action] || 'Harakat');
+    return card ? `${label}: ${card}` : label;
+  }
+
+  function closeActionConfirmModal() {
+    if (actionConfirmModal?.isConnected) actionConfirmModal.remove();
+    actionConfirmModal = null;
+  }
+
+  function showActionConfirmModal(req = {}) {
+    closeActionConfirmModal();
+    const actorName = req.actorName || 'Raqib';
+    const status = h('div', { class: 'muted', style: 'min-height:18px;font-size:12px' }, [
+      'Tasdiqlasangiz harakat bajariladi, rad etsangiz navbat davom etadi.',
+    ]);
+    const answer = async (accept) => {
+      status.textContent = accept ? 'Tasdiqlanmoqda...' : 'Rad etilmoqda...';
+      const resp = await emitWithAck('game:action_confirm', {
+        code,
+        requestId: req.id,
+        accept,
+      }, 5000).catch((e) => ({ ok: false, error: e.message }));
+      if (!resp?.ok) {
+        status.textContent = resp?.error || 'Tasdiq yuborilmadi';
+        return toast(resp?.error || 'Tasdiq yuborilmadi', 'error');
+      }
+      closeActionConfirmModal();
+      toast(accept ? 'Harakat tasdiqlandi' : 'Harakat rad etildi', accept ? 'success' : 'info');
+    };
+    const card = h('div', { class: 'modal action-confirm-modal', style: 'text-align:center;max-width:340px' }, [
+      h('h2', {}, ['Tasdiqlash kerak']),
+      h('p', { class: 'muted' }, [`${actorName} so‘radi:`]),
+      h('div', { class: 'private-room-code', style: 'margin:12px 0' }, [actionConfirmText(req)]),
+      status,
+      h('div', { class: 'row mt-16 gap-12' }, [
+        h('button', { class: 'btn-secondary grow', onclick: () => answer(false) }, ['Rad etish']),
+        h('button', { class: 'btn-big green grow', style: 'width:auto;min-height:auto;padding:13px', onclick: () => answer(true) }, ['Tasdiqlash']),
+      ]),
+    ]);
+    actionConfirmModal = h('div', { class: 'modal-bg action-confirm-bg' }, [card]);
+    document.body.appendChild(actionConfirmModal);
+  }
+
+  const onActionConfirmRequest = (req) => {
+    sfx.play('click');
+    vibrate(16);
+    showActionConfirmModal(req);
+  };
+  const onActionConfirmWaiting = (req) => {
+    toast(`${actionConfirmText(req)} — raqib tasdig‘i kutilmoqda`, 'info', 1800);
+  };
+  const onActionConfirmRejected = () => {
+    closeActionConfirmModal();
+    toast('Harakat raqib tomonidan rad etildi', 'info');
+  };
+  const onActionConfirmCancelled = ({ reason } = {}) => {
+    closeActionConfirmModal();
+    toast(reason || 'Tasdiqlash bekor qilindi', 'info');
+  };
+  const onActionConfirmed = () => {
+    closeActionConfirmModal();
+  };
+
+  socket.on('room:state', onRoomState);
   socket.on('chat:message', onChatMessage);
   socket.on('game:start', onGameStart);
   socket.on('game:move', onGameMove);
@@ -535,16 +1187,22 @@ export async function renderGame(root, params) {
   socket.on('emoji:react', onEmojiReact);
   socket.on('sticker:show', onStickerShow);
   socket.on('room:error', onRoomError);
-  // Feature 30: Voice chat
   socket.on('voice:request', onVoiceRequest);
   socket.on('voice:accept',  onVoiceAccept);
   socket.on('voice:offer',   onVoiceOffer);
   socket.on('voice:answer',  onVoiceAnswer);
   socket.on('voice:ice',     onVoiceIce);
+  socket.on('voice:reject',  onVoiceReject);
+  socket.on('voice:timeout', onVoiceTimeout);
+  socket.on('voice:error',   onVoiceError);
   socket.on('voice:end',     onVoiceEnd);
+  socket.on('game:action_confirm_request', onActionConfirmRequest);
+  socket.on('game:action_confirm_waiting', onActionConfirmWaiting);
+  socket.on('game:action_confirm_rejected', onActionConfirmRejected);
+  socket.on('game:action_confirm_cancelled', onActionConfirmCancelled);
+  socket.on('game:action_confirmed', onActionConfirmed);
 
   // Bug 4 fix: Barcha listenerlar ro'yxatga olingandan KEYIN room:join yuboriladi.
-  // Aks holda server game:start ni listener tayyor bo'lmasdan yuborishi mumkin (race condition).
   const isSpectating = params?.spectate === '1' || params?.spectate === 'true';
   if (isSpectating && params?.tournamentId && params?.matchId) {
     socket.emit('tournament:watch_match', {
@@ -562,7 +1220,7 @@ export async function renderGame(root, params) {
       }
     });
   } else if (code) {
-    socket.emit('room:join', { code }, (res) => {
+    socket.emit('room:join', { code, password: joinPassword }, (res) => {
       if (!res?.ok && !res?.reconnected) {
         hideRoyalLoader('game');
         wrap.innerHTML = '';
@@ -570,10 +1228,9 @@ export async function renderGame(root, params) {
         return;
       }
       if (res?.reconnected) {
-        // game:start event orqali view keladi — scheduleRender uni ushlaydi.
-        // Agar view callback da ham kelsa (kelajakdagi compat uchun), ishlatamiz:
         if (res.view) {
           if (loadingWatchdog) { clearTimeout(loadingWatchdog); loadingWatchdog = null; }
+          lobbyRoom = null;
           view = res.view; state.game = res.view; finishGameLoader('STOL TAYYOR'); scheduleRender();
         }
       }
@@ -582,16 +1239,17 @@ export async function renderGame(root, params) {
 
   if (!view && code && !isSpectating) {
     loadingWatchdog = setTimeout(() => {
-      if (view) return;
-      socket.emit('room:join', { code }, (res) => {
+      if (view || lobbyRoom) return;
+      socket.emit('room:join', { code, password: joinPassword }, (res) => {
         if (res?.view) {
+          lobbyRoom = null;
           view = res.view;
           state.game = res.view;
           finishGameLoader('STOL TAYYOR');
           scheduleRender({ immediate: true });
           return;
         }
-        if (!view) {
+        if (!view && !lobbyRoom) {
           hideRoyalLoader('game');
           wrap.innerHTML = '';
           wrap.appendChild(renderGameError(res?.error || 'O\'yin holati kelmadi. Xonaga qayta kiring.'));
@@ -604,25 +1262,67 @@ export async function renderGame(root, params) {
     return h('div', { class: 'game-flow-error' }, [
       h('div', { class: 'game-flow-error-card' }, [
         h('div', { class: 'game-flow-error-icon' }, ['!']),
-        h('h2', {}, ['O\'yin ochilmadi']),
-        h('p', {}, [message || 'Xona yoki server javob bermadi.']),
+        h('h2', {}, [tSafe('game.open_failed', 'O\'yin ochilmadi')]),
+        h('p', {}, [message || tSafe('game.room_no_response', 'Xona yoki server javob bermadi.')]),
         h('div', { class: 'row gap-12 mt-16' }, [
-          h('button', { class: 'btn-secondary grow', onclick: () => navigate('home') }, ['Bosh sahifa']),
-          h('button', { class: 'btn-big green grow', style: 'width:auto;min-height:auto;padding:13px', onclick: () => navigate('lobby') }, ['Stollar']),
+          h('button', { class: 'btn-secondary grow', onclick: () => navigate('home') }, [tSafe('game.nav_home', 'Bosh sahifa')]),
+          h('button', { class: 'btn-big green grow', style: 'width:auto;min-height:auto;padding:13px', onclick: () => navigate('lobby') }, [tSafe('game.nav_tables', 'Stollar')]),
         ]),
       ]),
     ]);
   }
 
-  function showStickerOverlay(img, senderName) {
-    const ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:9000;pointer-events:none;text-align:center;animation:cardDealIn .42s cubic-bezier(.34,1.56,.64,1)';
-    ov.innerHTML = `
-      <img src="${img}" style="max-width:200px;max-height:200px;filter:drop-shadow(0 12px 28px rgba(0,0,0,.7))" onerror="this.style.display='none'" />
-      <div style="margin-top:8px;color:var(--rc-gold-bright);font-weight:900;font-size:13px;text-shadow:0 2px 4px #000">${senderName || ''}</div>`;
+  function showStickerOverlay(payloadOrImg, senderNameArg = '') {
+    const payload = (payloadOrImg && typeof payloadOrImg === 'object')
+      ? payloadOrImg
+      : { img: payloadOrImg, senderName: senderNameArg };
+    const img = String(payload.img || '').trim();
+    if (!img) return;
+    const senderName = String(payload.senderName || senderNameArg || '').trim();
+    const dedupeKey = `${payload.senderId || payload.playerId || ''}:${payload.roomCode || code || ''}:${img}`;
+    const now = Date.now();
+    if (dedupeKey === lastStickerOverlayKey && now - lastStickerOverlayAt < 700) return;
+    lastStickerOverlayKey = dedupeKey;
+    lastStickerOverlayAt = now;
+
+    document.querySelectorAll('.game-sticker-overlay').forEach((node) => node.remove());
+    const lite = wrap.classList.contains('perf-lite') || reduceMotion || lowEndDevice || nativeWebView;
+    const ov = h('div', {
+      class: `game-sticker-overlay${lite ? ' lite' : ''}`,
+      role: 'status',
+      'aria-live': 'polite',
+    }, [
+      h('div', { class: 'game-sticker-overlay-card' }, [
+        h('span', { class: 'game-sticker-overlay-glow' }, []),
+        !lite ? h('span', { class: 'game-sticker-spark s1' }, []) : null,
+        !lite ? h('span', { class: 'game-sticker-spark s2' }, []) : null,
+        !lite ? h('span', { class: 'game-sticker-spark s3' }, []) : null,
+        h('span', { class: 'game-sticker-overlay-fallback' }, ['STICKER']),
+        h('img', {
+          src: img,
+          alt: senderName ? `${senderName} sticker` : 'Sticker',
+          loading: 'eager',
+          decoding: 'async',
+          onload: (e) => e.currentTarget.closest('.game-sticker-overlay-card')?.classList.add('has-sticker-img'),
+          onerror: (e) => {
+            e.currentTarget.style.display = 'none';
+            e.currentTarget.closest('.game-sticker-overlay-card')?.classList.add('broken-sticker-img');
+          },
+        }),
+      ]),
+      senderName ? h('div', { class: 'game-sticker-overlay-name' }, [senderName]) : null,
+    ]);
     document.body.appendChild(ov);
-    setTimeout(() => ov.remove(), 2200);
+    requestAnimationFrame(() => ov.classList.add('show'));
+    const holdMs = lite
+      ? Math.max(1700, Math.min(2300, Number(payload.durationMs || STICKER_OVERLAY_MS)))
+      : Math.max(STICKER_OVERLAY_MS, Number(payload.durationMs || STICKER_OVERLAY_MS) + 650);
+    setTimeout(() => {
+      ov.classList.add('hide');
+      setTimeout(() => ov.remove(), lite ? 120 : 260);
+    }, holdMs);
   }
+
   function isMyTurnAttacker(me) {
     return view.phase === 'attacking' && (
       view.players[view.attackerIdx]?.id === me?.id ||
@@ -646,13 +1346,15 @@ export async function renderGame(root, params) {
       && view.table.every((t) => !t.defense)
       && view.table.some((t) => (t.attack?.rank || t.claimedRank) === card.rank);
     const action = canTransfer ? 'transfer' : (isDef ? 'defense' : 'attack');
-    const cardId = `${card.rank}${card.suit}`;
-    sfx.play(isDef && !canTransfer ? 'cardBeat' : 'cardThrow');
+    const cardId = cardWireId(card);
+    if (isDef && !canTransfer) sfx.play('cardBeat');
     vibrate(isDef && !canTransfer ? 18 : 12);
     try {
       const resp = await emitWithAck('game:action', { code, action, payload: { card: cardId } })
         .catch((e) => ({ ok: false, error: e.message }));
-      if (!resp?.ok) {
+      if (resp?.pending) {
+        toast('Raqib tasdig‘i kutilmoqda', 'info', 1600);
+      } else if (!resp?.ok) {
         sfx.play('error');
         toast(resp?.error || 'Noto\'g\'ri yurish', 'error');
       }
@@ -698,37 +1400,132 @@ export async function renderGame(root, params) {
     return x >= zone.left - padX && x <= zone.right + padX && y >= zone.top - padY && y <= zone.bottom + padY;
   }
 
-  function animatePlayedCard(cardEl, zone) {
-    const rect = cardEl.getBoundingClientRect();
+  function animatePlayedCard(cardEl, zone, releaseRect = null, homeRect = null) {
     const target = zone || getTableDropZone();
-    const targetX = (target.left + target.right) / 2 - rect.width / 2;
-    const targetY = target.top + (target.bottom - target.top) * 0.54 - rect.height / 2;
-    const dx = targetX - rect.left;
-    const dy = targetY - rect.top;
+
+    // Fallback if not provided
+    const hRect = homeRect || cardEl.getBoundingClientRect();
+    const rRect = releaseRect || hRect;
+
+    const centerX = rRect.left + rRect.width / 2;
+    const centerY = rRect.top + rRect.height / 2;
+
+    const startLeft = centerX - hRect.width / 2;
+    const startTop = centerY - hRect.height / 2;
+
+    const targetX = (target.left + target.right) / 2 - hRect.width / 2;
+    const targetY = target.top + (target.bottom - target.top) * 0.5 - hRect.height / 2;
+
+    const dx = targetX - startLeft;
+    const dy = targetY - startTop;
+
+    // Performance rejimini aniqlash
+    const lite = wrap.classList.contains('perf-lite') || reduceMotion || lowEndDevice || nativeWebView;
+    const duration = lite ? 240 : 340; // slightly faster for enhanced responsiveness
+
+    // Random rotation (real karta tashlanganda har xil burchak)
+    // Tashlash yo'nalishi bo'yicha rotation: chapga otsa -burchak, o'ngga +burchak
+    const dirSign = dx === 0 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(dx);
+    const finalRotation = lite ? 0 : dirSign * (4 + Math.random() * 6); // 4-10deg
+    const peakRotation = lite ? 0 : dirSign * (8 + Math.random() * 5);  // 8-13deg peak
+
+    // Arc — karta engil yuqoriga ko'tarilib tushadi (parabola)
+    const arcLift = lite ? 0 : Math.min(40, Math.abs(dy) * 0.18);
+
+    // Clone yaratish using unscaled home size
     const clone = cardEl.cloneNode(true);
-    clone.classList.remove('dragging', 'drop-ready', 'selected', 'snap-back', 'fly-to-table');
+    clone.classList.remove('dragging', 'drop-ready', 'selected', 'snap-back', 'fly-to-table', 'dealing');
     clone.classList.add('throw-clone');
-    clone.style.left = `${rect.left}px`;
-    clone.style.top = `${rect.top}px`;
-    clone.style.width = `${rect.width}px`;
-    clone.style.height = `${rect.height}px`;
-    clone.style.margin = '0';
-    clone.style.transform = 'translate3d(0,0,0) scale(1.06)';
-    clone.style.zIndex = '10000';
+    clone.style.cssText = `
+      position:fixed !important;
+      left:${startLeft}px !important;
+      top:${startTop}px !important;
+      width:${hRect.width}px !important;
+      height:${hRect.height}px !important;
+      margin:0 !important;
+      transform:translate3d(0,0,0) scale(1.08) rotate(0deg);
+      z-index:90000 !important;
+      pointer-events:none !important;
+      will-change:transform, opacity;
+      transition:none !important;
+    `;
     document.body.appendChild(clone);
-    cardEl.style.visibility = 'hidden';
-    const animation = clone.animate([
-      { transform: 'translate3d(0,0,0) scale(1.06) rotate(0deg)', opacity: 1, offset: 0 },
-      { transform: `translate3d(${dx * 0.82}px, ${dy * 0.82}px, 0) scale(1.03) rotate(2deg)`, opacity: 1, offset: 0.72 },
-      { transform: `translate3d(${dx}px, ${dy}px, 0) scale(.94) rotate(0deg)`, opacity: 0.12, offset: 1 },
-    ], {
-      duration: 560,
-      easing: 'cubic-bezier(.18,.82,.24,1)',
+
+    // Asl karta - darhol yashirish (flicker va sakrash oldini olish)
+    cardEl.style.transition = 'none';
+    cardEl.style.opacity = '0';
+    cardEl.style.pointerEvents = 'none';
+
+    // Animatsiya keyframes — 3 fazali professional
+    // Faza 1 (0-25%): biroz yuqoriga ko'tariladi va kattalashadi (lift-off)
+    // Faza 2 (25-75%): asosiy parvoz, arc + rotation peak
+    // Faza 3 (75-100%): stolga tushadi, engil bounce
+    const keyframes = lite ? [
+      // Mobil/APK: sodda 2 faza (performance uchun)
+      { transform: `translate3d(0, 0, 0) scale(1.08) rotate(0deg)`, opacity: 1, offset: 0 },
+      { transform: `translate3d(${dx}px, ${dy}px, 0) scale(1) rotate(${finalRotation}deg)`, opacity: 0.95, offset: 1 },
+    ] : [
+      // Desktop: to'liq 4 faza, smooth
+      {
+        transform: `translate3d(0, 0, 0) scale(1.08) rotate(0deg)`,
+        opacity: 1,
+        offset: 0,
+        filter: 'drop-shadow(0 8px 14px rgba(0,0,0,.5))',
+      },
+      {
+        // Lift-off: yuqoriga ko'tariladi, kattaroq, peak rotation
+        transform: `translate3d(${dx * 0.25}px, ${dy * 0.25 - arcLift}px, 0) scale(1.12) rotate(${peakRotation * 0.6}deg)`,
+        opacity: 1,
+        offset: 0.25,
+        filter: 'drop-shadow(0 22px 30px rgba(0,0,0,.6))',
+      },
+      {
+        // Mid-flight: arc peak
+        transform: `translate3d(${dx * 0.65}px, ${dy * 0.65 - arcLift * 0.6}px, 0) scale(1.06) rotate(${peakRotation}deg)`,
+        opacity: 1,
+        offset: 0.6,
+        filter: 'drop-shadow(0 18px 24px rgba(0,0,0,.55))',
+      },
+      {
+        // Landing: stolga tushadi, biroz oshib ketadi (overshoot)
+        transform: `translate3d(${dx * 1.02}px, ${dy * 1.02}px, 0) scale(0.98) rotate(${finalRotation * 1.1}deg)`,
+        opacity: 1,
+        offset: 0.88,
+        filter: 'drop-shadow(0 10px 16px rgba(0,0,0,.45))',
+      },
+      {
+        // Settle: yakuniy o'rin, smooth landing
+        transform: `translate3d(${dx}px, ${dy}px, 0) scale(1) rotate(${finalRotation}deg)`,
+        opacity: 1,
+        offset: 1,
+        filter: 'drop-shadow(0 6px 12px rgba(0,0,0,.4))',
+      },
+    ];
+
+    const animation = clone.animate(keyframes, {
+      duration,
+      // Custom easing: tez boshlanadi, oxirida sekinlashadi (real karta inertia)
+      easing: lite ? 'cubic-bezier(.25,.85,.35,1)' : 'cubic-bezier(.22,.61,.36,1.02)',
       fill: 'forwards',
     });
-    animation.onfinish = () => clone.remove();
-    animation.oncancel = () => clone.remove();
-    setTimeout(() => clone.remove(), 760);
+
+    // Cleanup — animatsiya tugaganda clone ni server javobi bilan sinxron olib tashlash
+    // Server karta to'g'ri tushgani tasdiqlasa, render() yangi table card chizadi
+    // va biz clone ni shu vaqtda olib tashlaymiz (flicker yo'q)
+    const cleanup = () => {
+      if (clone.isConnected) {
+        // Fade out tezkor (60ms) — render orqali yangi karta ko'rinishi bilan birga
+        clone.style.transition = 'opacity 60ms ease-out';
+        clone.style.opacity = '0';
+        setTimeout(() => clone.remove(), 80);
+      }
+    };
+    animation.onfinish = cleanup;
+    animation.oncancel = cleanup;
+    // Safety timeout — har qanday holatda 1s ichida olib tashlanadi
+    setTimeout(() => {
+      if (clone.isConnected) clone.remove();
+    }, duration + 400);
   }
 
   function attachDragToPlay(cardEl, card, canPlay, me) {
@@ -767,6 +1564,8 @@ export async function renderGame(root, params) {
       baseTransform = cardEl.style.transform || '';
       dropZone = getTableDropZone();
       cardEl.classList.add('dragging');
+      const handEl = cardEl.closest('.my-hand');
+      if (handEl) handEl.classList.add('hand-dragging');
       cardEl.setPointerCapture?.(e.pointerId);
       e.preventDefault();
     });
@@ -781,7 +1580,7 @@ export async function renderGame(root, params) {
       pendingDx = dx;
       pendingDy = dy;
       if (!rafMove) rafMove = requestAnimationFrame(flushDragMove);
-      cardEl.style.zIndex = '999';
+      cardEl.style.zIndex = '99999';
       cardEl.classList.toggle('drop-ready', pointIsOnTable(e.clientX, e.clientY, dropZone) || dy < -82);
       e.preventDefault();
     });
@@ -792,11 +1591,24 @@ export async function renderGame(root, params) {
       if (rafMove) { cancelAnimationFrame(rafMove); rafMove = null; }
       cardEl.releasePointerCapture?.(e.pointerId);
       cardEl.classList.remove('dragging');
+      const handEl = cardEl.closest('.my-hand');
+      if (handEl) handEl.classList.remove('hand-dragging');
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      const cardRect = cardEl.getBoundingClientRect();
-      const cardCenterX = cardRect.left + cardRect.width / 2;
-      const cardCenterY = cardRect.top + cardRect.height / 2;
+
+      // 1. Measure release position (scaled)
+      const releaseRect = cardEl.getBoundingClientRect();
+
+      // Reset card visual transform back to its home hand position
+      cardEl.style.transform = baseTransform;
+      cardEl.style.zIndex = '';
+      cardEl.classList.remove('drop-ready');
+
+      // 2. Measure home position (unscaled)
+      const homeRect = cardEl.getBoundingClientRect();
+
+      const cardCenterX = releaseRect.left + releaseRect.width / 2;
+      const cardCenterY = releaseRect.top + releaseRect.height / 2;
       const upwardThrow = dy < -72 && Math.abs(dx) < 220;
       const enoughMove = Math.hypot(dx, dy) > 18;
       const shouldPlay = enoughMove && (
@@ -805,15 +1617,15 @@ export async function renderGame(root, params) {
         || pointIsOnTable(lastX, lastY, dropZone)
         || upwardThrow
       );
-      cardEl.style.transform = baseTransform;
-      cardEl.style.zIndex = '';
-      cardEl.classList.remove('drop-ready');
       if (shouldPlay) {
         if (playingCard) { dropZone = null; return; }
         playingCard = true;
         cardEl.dataset.dragPlayed = '1';
         setTimeout(() => { delete cardEl.dataset.dragPlayed; }, 700);
-        animatePlayedCard(cardEl, dropZone);
+        
+        // 3. Pass both rects to start the flight animation exactly from the dragged position
+        animatePlayedCard(cardEl, dropZone, releaseRect, homeRect);
+        
         await sleep(CARD_THROW_COMMIT_MS);
         await playCard(card, { alreadyLocked: true });
       } else if (moved) {
@@ -827,17 +1639,82 @@ export async function renderGame(root, params) {
       dragging = false;
       if (rafMove) { cancelAnimationFrame(rafMove); rafMove = null; }
       cardEl.classList.remove('dragging');
+      const handEl = cardEl.closest('.my-hand');
+      if (handEl) handEl.classList.remove('hand-dragging');
       cardEl.classList.remove('drop-ready');
       cardEl.style.transform = baseTransform;
       cardEl.style.zIndex = '';
       dropZone = null;
+      playingCard = false;
+      scheduleRender();
     });
   }
 
-  function emitAction(action) {
+  async function emitAction(action) {
     sfx.play('click');
     vibrate(10);
-    return emitWithAck('game:action', { code, action }).catch(() => {});
+    const resp = await emitWithAck('game:action', { code, action }).catch((e) => ({ ok: false, error: e.message }));
+    if (resp?.pending) toast('Raqib tasdig‘i kutilmoqda', 'info', 1600);
+    else if (!resp?.ok) toast(resp?.error || 'Harakat bajarilmadi', 'error');
+    return resp;
+  }
+
+  function firstChallengeableBluff() {
+    if (!view?.bluffEnabled || !Array.isArray(view.table)) return -1;
+    return view.table.findIndex((pair) => pair?.attack?.faceDown || pair?.claimedRank);
+  }
+
+  function promptClaimedRank(defaultRank = '') {
+    const raw = window.prompt('Qaysi karta deb ko‘rsatasiz? (6,7,8,9,10,J,Q,K,A)', defaultRank === 'T' ? '10' : defaultRank);
+    const value = String(raw || '').trim().toUpperCase();
+    if (!value) return '';
+    if (value === '10') return 'T';
+    return ['6','7','8','9','T','J','Q','K','A'].includes(value) ? value : '';
+  }
+
+  async function bluffAttack(card) {
+    if (!card || !view?.bluffEnabled || !isMyTurnAttacker(view.players.find((p) => p.hand))) return;
+    if (playingCard) return;
+    const claimedRank = promptClaimedRank(card.rank);
+    if (!claimedRank) {
+      toast('Bluff uchun karta qiymatini tanlang', 'info');
+      return;
+    }
+    playingCard = true;
+    sfx.play('click');
+    vibrate(12);
+    const cardId = cardWireId(card);
+    try {
+      const resp = await emitWithAck('game:action', {
+        code,
+        action: 'attack',
+        payload: { card: cardId, bluff: true, claimedRank },
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (resp?.pending) {
+        toast('Raqib tasdig‘i kutilmoqda', 'info', 1600);
+      } else if (!resp?.ok) {
+        sfx.play('error');
+        toast(resp?.error || 'Bluff yurish qabul qilinmadi', 'error');
+      }
+    } finally {
+      selectedCard = null;
+      playingCard = false;
+      scheduleRender();
+    }
+  }
+
+  async function challengeBluffAt(tableIdx) {
+    if (tableIdx < 0) return toast('Stolda shubhali karta yo‘q', 'info');
+    sfx.play('click');
+    const resp = await emitWithAck('game:action', {
+      code,
+      action: 'challenge',
+      payload: { tableIdx },
+    }).catch((e) => ({ ok: false, error: e.message }));
+    if (!resp?.ok) {
+      sfx.play('error');
+      toast(resp?.error || 'Shubha qabul qilinmadi', 'error');
+    }
   }
 
   async function usePerk(perk) {
@@ -865,13 +1742,13 @@ export async function renderGame(root, params) {
     const opponents = (view?.players || []).filter((p) => !p.hand);
     if (!opponents.length) { toast('Hech kim yo\'q', 'info'); return; }
     let target = opponents[0].id;
-    let reason = REPORT_REASONS[0].id;
+    let reason = REPORT_REASONS()[0].id;
     let details = '';
 
     const card = h('div', { class: 'modal' }, [
       h('h2', {}, ['🚩 Shikoyat']),
       labelBlock('O\'yinchi', selectFromList(opponents.map(p => [p.id, p.username]), v => target = v)),
-      labelBlock('Sabab',    selectFromList(REPORT_REASONS.map(r => [r.id, r.label]), v => reason = v)),
+      labelBlock('Sabab',    selectFromList(REPORT_REASONS().map(r => [r.id, r.label]), v => reason = v)),
       (() => {
         const ta = document.createElement('textarea');
         ta.placeholder = 'Ixtiyoriy: tafsilotlar';
@@ -903,8 +1780,7 @@ export async function renderGame(root, params) {
   }
 
   function isTextChatAllowed() {
-    const tableSize = Number(view?.maxPlayers || view?.players?.length || 0);
-    return view?.textChatEligible !== false && tableSize === 2;
+    return false;
   }
 
   function sendEmojiReaction(label) {
@@ -927,7 +1803,6 @@ export async function renderGame(root, params) {
 
   function refreshLiveChatFeed() {
     wrap.querySelector('.game-chat-feed')?.remove();
-    if (liveChat.length) renderLiveChatFeed();
   }
 
   function refreshReactionsPanel() {
@@ -937,14 +1812,9 @@ export async function renderGame(root, params) {
   }
 
   function setChatPanel(open) {
-    chatOpen = Boolean(open);
-    if (chatOpen) {
-      stickerOpen = false;
-      reactionsOpen = false;
-      renderStickerPanel();
-      refreshReactionsPanel();
-    }
-    renderChat();
+    chatOpen = false;
+    wrap.querySelector('.chat-panel')?.remove();
+    if (open) toast("Yozma chat o'yindan tashqarida. O'yinda voice va stiker ishlaydi.", 'info');
   }
 
   function toggleReactions(tab = 'emoji') {
@@ -986,21 +1856,64 @@ export async function renderGame(root, params) {
     wrap.appendChild(bg);
   }
 
+  function loadOwnedEmojiForReactions({ force = false } = {}) {
+    if (loadingOwnedEmoji) return;
+    if (!force && ownedEmojiCache && Date.now() - Number(ownedEmojiCache.at || 0) < 15000) return;
+    loadingOwnedEmoji = true;
+    ownedEmojiError = '';
+    api.inventoryGrouped()
+      .then((data) => {
+        ownedEmojiCache = { at: Date.now(), items: ownedEmojiItemsFromGrouped(data) };
+      })
+      .catch((err) => {
+        ownedEmojiError = err.message || 'Emoji packlar yuklanmadi';
+      })
+      .finally(() => {
+        loadingOwnedEmoji = false;
+        if (reactionsOpen && reactionsTab === 'emoji') refreshReactionsPanel();
+      });
+  }
+
+  function reactionEmojiItems() {
+    loadOwnedEmojiForReactions();
+    const extras = Array.isArray(ownedEmojiCache?.items) ? ownedEmojiCache.items : [];
+    return [
+      ...BASE_EMOJI_ITEMS.map((label) => ({ label, title: label })),
+      ...extras,
+    ].slice(0, 80);
+  }
+
+  function renderEmojiReactionButton(item) {
+    const label = String(item?.label || '😀');
+    return h('button', {
+      onclick: () => sendEmojiReaction(label),
+      title: item?.title || label,
+    }, [
+      item?.img ? h('img', {
+        src: item.img,
+        alt: item?.title || label,
+        loading: 'lazy',
+        style: 'width:34px;height:34px;object-fit:contain',
+        onerror: (e) => { e.currentTarget.remove(); },
+      }) : label,
+    ]);
+  }
+
   function renderReactionsPanel() {
     if (!reactionsOpen || !pref('pref_emotions', state.user)) return null;
     const tabButton = (tab, label) => h('button', {
       class: reactionsTab === tab ? 'active' : '',
       onclick: () => setReactionTab(tab),
     }, [label]);
-    const emojiItems = ['😀','😂','🤔','😎','😡','🥳','👍','👎','❤️','🔥','💯','🎉','🎴','♠','♥','♦','♣','🏆'];
+    const emojiItems = reactionEmojiItems();
     const section = (title, child) => h('section', { class: `reaction-section ${reactionsTab === title ? 'active' : ''}` }, [
       h('div', { class: 'reaction-section-title' }, [title]),
       child,
     ]);
     const content = h('div', { class: 'reaction-sections' }, [
       section('emoji', h('div', { class: 'reaction-grid' }, emojiItems.map((e) =>
-        h('button', { onclick: () => sendEmojiReaction(e) }, [e])
-      ))),
+        renderEmojiReactionButton(e)
+      ).concat(loadingOwnedEmoji ? [h('button', { disabled: true }, ['...'])] : ownedEmojiError ? [h('button', { onclick: () => loadOwnedEmojiForReactions({ force: true }) }, ['↻'])] : []))),
       section('stickers', h('div', { class: 'reaction-grid reaction-tool-grid' }, [
         h('button', { onclick: openStickerPicker }, [h('span', {}, ['🎭']), h('small', {}, ['Stikerlar'])]),
         h('button', { onclick: openStickerPicker }, [h('span', {}, ['GIF']), h('small', {}, ['Packlar'])]),
@@ -1037,14 +1950,13 @@ export async function renderGame(root, params) {
     }
     sfx.play('click');
     const bg = h('div', { class: 'modal-bg' });
-    const card = h('div', { class: 'modal forfeit-confirm-modal' }, [
-      h('h2', {}, ['O‘yindan chiqish']),
-      h('p', { class: 'muted' }, [`Chiqsangiz, $${formatGameMoney(view.stake)} tikishingiz qolgan o‘yinchilarga taqsimlanadi. Natija shu ekranda ko‘rsatiladi.`]),
-      h('div', { class: 'row gap-12 mt-16' }, [
-        h('button', { class: 'btn-secondary grow', onclick: () => bg.remove() }, ['Qolish']),
+    const card = h('div', { class: 'modal forfeit-confirm-modal demo-surrender-modal' }, [
+      h('p', { class: 'demo-surrender-question' }, ['Are you sure you want to surrender?']),
+      h('small', {}, [`$${formatGameMoney(view.stake)} tikish qolgan o'yinchilarga taqsimlanadi.`]),
+      h('div', { class: 'demo-surrender-actions' }, [
+        h('button', { class: 'demo-surrender-no', onclick: () => bg.remove() }, ['NO']),
         h('button', {
-          class: 'btn-done',
-          style: 'padding:12px 20px;font-size:14px',
+          class: 'demo-surrender-yes btn-done',
           onclick: async () => {
             const btn = card.querySelector('.btn-done');
             if (btn) btn.disabled = true;
@@ -1073,7 +1985,7 @@ export async function renderGame(root, params) {
             completeRoyalLoader('NATIJA TAYYOR', 540, 'exit');
             scheduleRender();
           },
-        }, ['Chiqish']),
+        }, ['YES']),
       ]),
     ]);
     bg.appendChild(card);
@@ -1081,9 +1993,110 @@ export async function renderGame(root, params) {
     wrap.appendChild(bg);
   }
 
+  function renderPregame(room) {
+    const maxPlayers = Number(room.maxPlayers || 2);
+    const seats = Array.from({ length: maxPlayers }, (_, i) => room.seats?.[i] || null);
+    const seated = seats.filter(Boolean);
+    const taken = seated.length;
+    const me = seated.find((s) => s.id === state.user?.id) || null;
+    const allSeatedReady = taken > 0 && seated.every((s) => s.ready);
+    const privateWaiting = room.isPrivate && taken < maxPlayers;
+    const cardsSoon = allSeatedReady && !privateWaiting;
+    const bank = Number(room.stake || 0) * Math.max(1, taken || 1);
+    const statusText = privateWaiting
+      ? "Do'stingiz stolga kirishini kutyapmiz"
+      : cardsSoon
+        ? 'Kartalar tarqatilmoqda'
+        : me?.ready
+          ? 'Boshqa o‘yinchilar tayyor bo‘lishini kutyapmiz'
+          : '30 soniya ichida Tayyor bosing';
+    const buttonText = readyChanging
+      ? '...'
+      : cardsSoon
+        ? 'Tayyor'
+        : 'Tayyor';
+    const readySeconds = armPregameReadyClock(room, me, cardsSoon);
+
+    const top = h('div', { class: 'game-topbar pregame-topbar' }, [
+      h('button', { class: 'btn-icon danger-exit', title: 'Chiqish', onclick: leavePregame }, ['‹']),
+      h('div', { class: 'pot' }, [
+        h('span', {}, [`💰 ${Number(room.stake || 0).toLocaleString('ru-RU')}`]),
+        h('span', {}, [`👥 ${taken}/${maxPlayers}`]),
+        h('span', {}, [`🃏 ${room.deckSize || 36}`]),
+      ]),
+      h('button', { class: 'btn-icon game-settings-btn', title: 'Sozlamalar', onclick: () => navigate('settings') }, ['⚙']),
+      h('div', { class: 'room-id' }, [`#${room.code || code}`]),
+    ]);
+
+    const seatNode = (seat, index) => {
+      if (!seat) {
+        return h('div', { class: 'pregame-seat empty' }, [
+          h('div', { class: 'pregame-seat-avatar empty' }, ['+']),
+          h('div', { class: 'pregame-seat-main' }, [
+            h('b', {}, [`Joy ${index + 1}`]),
+            h('small', {}, ['Kutilmoqda']),
+          ]),
+        ]);
+      }
+      const mine = seat.id === state.user?.id;
+      const seatAvatar = renderPlayerAvatar(seat, { dataPlayer: false });
+      if (seat.ready) seatAvatar.appendChild(h('span', { class: 'pregame-ready-check' }, ['✓']));
+      return h('div', { class: `pregame-seat taken ${seat.ready ? 'ready' : ''} ${mine ? 'me' : ''}` }, [
+        seatAvatar,
+        h('div', { class: 'pregame-seat-main' }, [
+          h('b', {}, [displayGameName(seat) || `O'yinchi ${index + 1}`]),
+          h('small', {}, [seat.ready ? 'Tayyor' : 'Tayyor kutilmoqda']),
+        ]),
+        h('span', { class: 'pregame-ready-dot' }, [seat.ready ? '✓' : '']),
+      ]);
+    };
+
+    return h('div', { class: 'game-pregame-shell' }, [
+      renderClubBackground(),
+      top,
+      h('aside', { class: 'royal-game-left pregame-left' }, [
+        h('button', { class: 'royal-square-btn', onclick: leavePregame, title: 'Chiqish' }, ['‹']),
+        h('div', { class: 'royal-stake-box' }, [
+          h('small', {}, ['Stavka:']),
+          h('strong', {}, [`$ ${Number(room.stake || 0).toLocaleString('ru-RU')}`]),
+          h('i', {}, []),
+          h('small', {}, ['Bank:']),
+          h('strong', { class: 'green' }, [`$ ${bank.toLocaleString('ru-RU')}`]),
+        ]),
+      ]),
+      h('section', { class: 'pregame-table-stage' }, [
+        h('div', { class: 'pregame-deck-stack', 'aria-hidden': 'true' }, [
+          h('span', {}, []), h('span', {}, []), h('span', {}, []),
+        ]),
+        h('div', { class: 'pregame-title' }, ['STOL TAYYOR']),
+        h('div', { class: 'pregame-status' }, [statusText]),
+        h('div', { class: 'pregame-seats-grid' }, seats.map(seatNode)),
+      ]),
+      h('div', { class: 'pregame-bottom-dock' }, [
+        renderPlayerAvatar(me || state.user, { dataPlayer: false, mine: true }),
+        h('div', { class: 'pregame-me-info' }, [
+          h('b', {}, [displayGameName(state.user) || 'Siz']),
+          h('small', {}, [me?.ready ? 'Tayyor bosildi' : `${Math.max(0, readySeconds)} sekund qoldi`]),
+        ]),
+        h('button', {
+          class: `pregame-start-button ${me?.ready ? 'ready' : ''}`,
+          disabled: !me || readyChanging || cardsSoon,
+          onclick: () => toggleReadyFromGame(room, me),
+        }, [
+          h('strong', {}, [buttonText]),
+          !me?.ready && !cardsSoon ? h('small', {}, [`${Math.max(0, readySeconds)}s`]) : null,
+        ]),
+      ]),
+    ]);
+  }
+
   function render() {
     wrap.innerHTML = '';
     if (!view) {
+      if (lobbyRoom) {
+        wrap.appendChild(renderPregame(lobbyRoom));
+        return;
+      }
       wrap.appendChild(h('div', { class: 'end-overlay' }, [
         h('div', { class: 'result-title' }, ['Yuklanmoqda…']),
       ]));
@@ -1092,12 +2105,12 @@ export async function renderGame(root, params) {
 
     const me = view.players.find((p) => p.hand);
     const opps = view.players.filter((p) => p !== me);
-    const highlights = highlightableCards(view, me);
     const forfeitInfo = view.forfeit || null;
     const forfeitedId = forfeitInfo?.playerId || null;
     const payoutByPlayer = new Map((view.payoutShares || []).map((s) => [s.playerId, Number(s.amount || 0)]));
     const myPayout = me?.id ? (payoutByPlayer.get(me.id) || 0) : 0;
     const activeCardSkin = currentCardSkin();
+    const liteRender = wrap.classList.contains('perf-lite');
     wrap.appendChild(renderClubBackground());
 
     // ── Top bar ──────────────────────────────────────────────────
@@ -1112,17 +2125,19 @@ export async function renderGame(root, params) {
       title: voiceState === 'active' ? 'Ovozni o\'chirish' : 'Ovozli chat',
       onclick: () => {
         if (voiceState === 'active') {
-          socket.emit('voice:end', { code });
-          stopVoice();
-          const el = document.getElementById('voice-remote-audio');
-          if (el) el.remove();
+          stopVoice({ emitEnd: true, notify: true, message: 'Ovoz o‘chirildi' });
         } else if (voiceState === 'idle') {
           voiceState = 'requesting';
           scheduleRender();
+          clearVoiceTimers();
+          voiceRequestTimer = setTimeout(() => {
+            if (voiceState !== 'requesting') return;
+            socket.emit('voice:end', { code, reason: 'request-timeout' }, () => {});
+            stopVoice({ notify: true, message: 'Ovozli chat so‘rovi javobsiz qoldi' });
+          }, VOICE_REQUEST_TIMEOUT_MS);
           socket.emit('voice:request', { code }, (res) => {
             if (!res?.ok) {
-              voiceState = 'idle';
-              scheduleRender();
+              stopVoice();
               toast(res?.error || 'Ovozli chat ochilmadi', 'error');
               return;
             }
@@ -1159,14 +2174,6 @@ export async function renderGame(root, params) {
       voiceBtn,
       aiBtn,
       emojiBtn,
-      h('button', {
-        class: 'btn-icon notif',
-        'data-count': String(chatLog.length || 0),
-        onclick: () => {
-          sfx.play('click');
-          setChatPanel(!chatOpen);
-        },
-      }, ['💬']),
       settingsBtn,
       h('div', { class: 'room-id' }, [`#${code}`]),
     ].filter(Boolean));
@@ -1181,9 +2188,23 @@ export async function renderGame(root, params) {
     wrap.appendChild(top);
 
     const bank = Number(view.stake || 0) * Math.max(1, Number(view.players?.length || 1));
-    wrap.appendChild(h('aside', { class: 'royal-game-left' }, [
-      h('button', { class: 'royal-square-btn', onclick: openForfeitDialog, title: 'Menyu' }, ['☰']),
-      h('button', { class: 'royal-square-btn', onclick: () => navigate('rules'), title: 'Qoida' }, ['▣']),
+    const commandItems = [
+      ['↪', 'Stolni tark etish', openForfeitDialog],
+      ['👥', 'Do\'stlar', () => navigate('friends')],
+      ['🎁', 'Sovg\'a yuborish', () => navigate('friends')],
+      ['?', 'Yordam', () => openAIChatModal(state.user, isPremium)],
+      ['🚩', 'Shikoyat', openReportDialog],
+    ];
+    wrap.appendChild(h('aside', { class: `royal-game-left${commandPanelOpen ? ' open' : ''}` }, [
+      h('button', {
+        class: `royal-square-btn demo-menu-trigger${commandPanelOpen ? ' active' : ''}`,
+        onclick: () => {
+          sfx.play('click');
+          commandPanelOpen = !commandPanelOpen;
+          scheduleRender({ immediate: true });
+        },
+        title: 'Menyu',
+      }, ['☰']),
       h('div', { class: 'royal-stake-box' }, [
         h('small', {}, ['Stavka:']),
         h('strong', {}, [`$ ${Number(view.stake || 0).toLocaleString()}`]),
@@ -1191,47 +2212,29 @@ export async function renderGame(root, params) {
         h('small', {}, ['Bank:']),
         h('strong', { class: 'green' }, [`$ ${bank.toLocaleString()}`]),
       ]),
-      h('button', { class: 'royal-rule-btn', onclick: () => navigate('rules') }, ['📖', h('span', {}, ['Qoida'])]),
+      commandPanelOpen ? h('div', { class: 'demo-command-panel' }, commandItems.map(([icon, label, onclick]) =>
+        h('button', {
+          class: 'demo-command-item',
+          onclick: () => {
+            commandPanelOpen = false;
+            sfx.play('click');
+            scheduleRender({ immediate: true });
+            onclick();
+          },
+        }, [
+          h('span', { class: 'demo-command-icon' }, [icon]),
+          h('span', {}, [label]),
+        ])
+      )) : null,
     ]));
 
     const trumpText = view.trumpCard
       ? `${view.trumpCard.rank === 'T' ? '10' : view.trumpCard.rank}${SUIT_GLYPH[view.trumpCard.suit] || ''}`
       : (SUIT_GLYPH[view.trumpSuit] || '');
     wrap.appendChild(h('aside', { class: 'royal-game-right' }, [
-      h('div', { class: 'royal-right-actions' }, [
-        h('button', {
-          class: reactionsOpen ? 'active' : '',
-          onclick: () => toggleReactions('emoji'),
-          title: 'Emoji va stikerlar',
-        }, ['😀']),
-        h('button', {
-          onclick: () => {
-            setChatPanel(!chatOpen);
-          },
-          title: 'Chat',
-        }, ['💬']),
-        h('button', { onclick: () => navigate('settings'), title: 'Sozlamalar' }, ['⚙']),
-        h('button', { class: 'wide', onclick: openForfeitDialog }, ['Chiqish']),
-      ]),
       h('div', { class: 'royal-trump-card' }, [
         h('small', {}, ['Kozir']),
         h('strong', {}, [trumpText]),
-      ]),
-      h('div', { class: 'royal-reactions' }, [
-        h('div', { class: 'reaction-tabs' }, [
-          h('button', { onclick: () => sendEmojiReaction('😀') }, ['Emoji']),
-          h('button', { class: 'active', onclick: openStickerPicker }, ['Stikerlar']),
-          h('button', { onclick: () => toast('Kosoncha keyingi yangilanishda', 'info') }, ['Kosoncha']),
-        ]),
-        h('div', { class: 'reaction-grid' }, ['😀','😂','🤔','😎','😡','🥳','👍','👎','❤️','🔥','💯','🎉','🎴','♠','♥','♦','♣','🏆'].map((e) =>
-          h('button', { onclick: () => sendEmojiReaction(e) }, [e])
-        )),
-        h('div', { class: 'reaction-bottom' }, [
-          h('button', { onclick: () => sendEmojiReaction('😀') }, ['😀']),
-          h('button', { onclick: openStickerPicker }, ['GIF']),
-          h('button', { onclick: openStickerPicker }, ['🎭']),
-          h('button', { onclick: () => toast('Tarix hozircha bo\'sh', 'info') }, ['◷']),
-        ]),
       ]),
     ]));
 
@@ -1246,8 +2249,8 @@ export async function renderGame(root, params) {
       const timerPanel = h('div', { class: `royal-turn-panel${isMe ? ' mine' : ''}` }, [
         makeTimerRing(remaining, turnTotalSeconds(view)),
         h('div', {}, [
-          h('div', { class: 'royal-turn-label' }, [isMe ? 'SIZNING NAVBATINGIZ' : 'RAQIB NAVBATI']),
-          h('div', { class: 'royal-turn-name' }, [activePlayer.nickname ? `@${activePlayer.nickname}` : activePlayer.username]),
+          h('div', { class: 'royal-turn-label' }, [isMe ? tSafe('game.your_turn', 'Sizning navbatingiz') : tSafe('game.not_your_turn', 'Sizning navbatingiz emas')]),
+          h('div', { class: 'royal-turn-name' }, [displayGameName(activePlayer)]),
         ]),
       ]);
       wrap.appendChild(timerPanel);
@@ -1291,11 +2294,13 @@ export async function renderGame(root, params) {
       oppEl.appendChild(fan);
 
       // Avatar
-      const avatarEl = h('div', { class: `avatar md color-${avatarColorFor(p.id)}`, style: 'position:relative' }, [
-        avatarLetter(p.username),
-        isDefender ? h('span', { class: 'role-badge' }, ['🛡']) : null,
-        isAttacker ? h('span', { class: 'role-badge' }, ['⚔']) : null,
-      ].filter(Boolean));
+      const avatarEl = renderPlayerAvatar(p, { dataPlayer: false });
+      if (isDefender) avatarEl.appendChild(h('span', { class: 'role-badge' }, ['🛡']));
+      if (isAttacker) avatarEl.appendChild(h('span', { class: 'role-badge' }, ['⚔']));
+      if (isTurn && view.turnDeadline) {
+        const remaining = Math.max(0, (view.turnDeadline - Date.now()) / 1000);
+        avatarEl.appendChild(makeTimerRing(remaining, turnTotalSeconds(view)));
+      }
       if (forfeitedId === p.id) {
         avatarEl.appendChild(h('span', { class: 'white-flag-badge' }, [
           h('i', {}, []),
@@ -1304,17 +2309,21 @@ export async function renderGame(root, params) {
       }
       if (payoutByPlayer.get(p.id)) {
         avatarEl.appendChild(h('span', { class: 'mini-payout-pop' }, [`+${formatGameMoney(payoutByPlayer.get(p.id))}`]));
+      } else if (view.phase === 'ended' && view.durakId === p.id) {
+        avatarEl.appendChild(h('span', { class: 'mini-payout-pop loss' }, [`-${formatGameMoney(view.stake)}`]));
       }
       oppEl.appendChild(avatarEl);
-      oppEl.appendChild(h('div', { class: 'opp-name' }, [
-        p.nickname ? `@${p.nickname}` : p.username,
-      ]));
+      oppEl.appendChild(h('div', { class: 'opp-name' }, [displayGameName(p)]));
 
       if (typingByPlayer[p.id]) {
         oppEl.appendChild(makeTypingBubble());
       }
       if (speechByPlayer[p.id]) {
         oppEl.appendChild(makeSpeechBubble(p.id));
+      }
+      if (stickerByPlayer[p.id]) {
+        const stickerBubble = makeStickerBubble(p.id);
+        if (stickerBubble) oppEl.appendChild(stickerBubble);
       }
 
       if (isTurn) oppEl.appendChild(h('div', { class: 'turn-glow' }));
@@ -1383,90 +2392,75 @@ export async function renderGame(root, params) {
     // ── Action bar ───────────────────────────────────────────────
     const canTake = isMyTurnDefender(me);
     const canPass = isMyTurnAttacker(me) && view.table.length > 0;
-    const canPlaySelected = selectedCard && (canTake || isMyTurnAttacker(me)) && highlights.has(selectedCard.rank + selectedCard.suit);
+    const canAttemptSelected = !!selectedCard && canAttemptCardPlay(view, me);
+    const bluffIdx = firstChallengeableBluff();
+    const canBluff = !!(view.bluffEnabled && selectedCard && isMyTurnAttacker(me));
+    const primaryAction = primaryActionState(me);
+    if (primaryAction) {
+      wrap.appendChild(h('button', {
+        class: `demo-primary-action ${primaryAction.key}${primaryAction.enabled ? '' : ' disabled'}`,
+        disabled: !primaryAction.enabled,
+        onclick: primaryAction.onclick,
+      }, [
+        h('strong', {}, [primaryAction.label]),
+        primaryAction.sub ? h('small', {}, [primaryAction.sub]) : null,
+      ]));
+    }
     wrap.appendChild(h('div', { class: 'royal-action-dock' }, [
       h('button', {
         class: `royal-table-action pass ${canPass ? '' : 'disabled'}`,
-        onclick: () => canPass ? emitAction('pass') : toast('Hozir pass qilib bo\'lmaydi', 'info'),
-      }, [h('strong', {}, ['PASS']), h('small', {}, ["O'TKAZIB YUBORISH"])]),
+        onclick: () => canPass ? emitAction('pass') : toast(tSafe('game.not_your_turn', 'Sizning navbatingiz emas'), 'info'),
+      }, [h('strong', {}, [tSafe('game.pass', "O'tkazish")]), h('small', {}, [tSafe('game.done', 'Tugadi')])]),
       h('button', {
         class: `royal-table-action take ${canTake ? '' : 'disabled'}`,
-        onclick: () => canTake ? (sfx.play('take'), vibrate(18), emitAction('take')) : toast('Hozir karta olish navbati emas', 'info'),
-      }, [h('strong', {}, ['OLISH']), h('small', {}, ['KARTANI OLISH'])]),
+        onclick: () => canTake ? (sfx.play('take'), vibrate(18), emitAction('take')) : toast(tSafe('game.take_not_allowed', 'Hozir karta olish navbati emas'), 'info'),
+      }, [h('strong', {}, [tSafe('game.take', 'Olish')]), h('small', {}, [tSafe('game.take', 'Olish')])]),
       h('button', {
-        class: `royal-table-action hit ${canPlaySelected ? '' : 'disabled'}`,
-        onclick: () => canPlaySelected ? playCard(selectedCard) : toast('Avval yuradigan kartani tanlang', 'info'),
-      }, [h('strong', {}, ['URISH']), h('small', {}, ['KARTANI URISH'])]),
-    ]));
+        class: `royal-table-action hit ${canAttemptSelected ? '' : 'disabled'}`,
+        onclick: () => canAttemptSelected ? playCard(selectedCard) : toast(tSafe('game.select_card_first', 'Avval yuradigan kartani tanlang'), 'info'),
+      }, [h('strong', {}, [tSafe('game.play_card', 'Tashlash')]), h('small', {}, [tSafe('game.play_card', 'Tashlash')])]),
+      view.bluffEnabled ? h('button', {
+        class: `royal-table-action bluff ${canBluff ? '' : 'disabled'}`,
+        onclick: () => canBluff ? bluffAttack(selectedCard) : toast('Bluff uchun avval kartani tanlang', 'info'),
+      }, [h('strong', {}, ['ALDASH']), h('small', {}, ['Yopiq tashlash'])]) : null,
+      view.bluffEnabled ? h('button', {
+        class: `royal-table-action challenge ${bluffIdx >= 0 ? '' : 'disabled'}`,
+        onclick: () => bluffIdx >= 0 ? challengeBluffAt(bluffIdx) : toast('Shubha qiladigan yopiq karta yo‘q', 'info'),
+      }, [h('strong', {}, ['SHUBHA']), h('small', {}, ['Bluffni ochish'])]) : null,
+    ].filter(Boolean)));
 
     const actionBar = h('div', { class: `action-bar${pref('pref_right_action', state.user) ? ' action-bar-right' : ''}` });
     if (isMyTurnDefender(me)) {
       actionBar.appendChild(h('button', {
         class: 'btn-done',
         onclick: () => { sfx.play('take'); vibrate(18); emitAction('take'); },
-      }, ['Olaman']));
+      }, [tSafe('game.take_button_short', 'Olaman')]));
     }
     if (isMyTurnAttacker(me) && view.table.length > 0) {
       actionBar.appendChild(h('button', {
         class: 'btn-secondary',
         style: 'font-size:15px;padding:13px 22px',
         onclick: () => { emitAction('pass'); },
-      }, ['Pas / Bitti']));
+      }, [tSafe('game.pass_done_short', 'Pas / Bitti')]));
     }
     wrap.appendChild(actionBar);
 
-    // ── Perks bar ────────────────────────────────────────────────
-    if (view.mode !== 'tournament' && view.phase !== 'ended') {
-      const perksBar = h('div', { class: 'perks-bar' });
-      const commands = [
-        ['↪', 'Stolni tark etish', openForfeitDialog],
-        ['👥', 'Do\'stlar', () => navigate('friends')],
-        ['💬', 'Chat', () => {
-          setChatPanel(true);
-        }],
-        ['🎁', 'Sovg\'a yuborish', () => navigate('friends')],
-        ['?', 'Yordam', () => openAIChatModal(state.user, isPremium)],
-      ];
-      for (const [icon, label, onclick] of commands) {
-        perksBar.appendChild(h('button', {
-          class: 'perk-btn royal-command-btn',
-          onclick: () => {
-            sfx.play('click');
-            onclick();
-          },
-        }, [
-          h('span', { class: 'perk-icon' }, [icon]),
-          h('span', {}, [label]),
-        ]));
-      }
-      for (const perk of []) {
-        perksBar.appendChild(h('button', {
-          class: 'perk-btn',
-          onclick: () => usePerk(perk),
-        }, [
-          h('span', { class: 'perk-icon' }, [perk.icon]),
-          h('span', {}, [perk.label]),
-          h('span', { class: 'perk-cost' }, [`${perk.cost} ⚡`]),
-        ]));
-      }
-      perksBar.appendChild(h('button', {
-        class: 'btn-secondary',
-        style: 'margin-left:10px;padding:8px 14px;font-size:11px',
-        onclick: openReportDialog,
-      }, ['🚩 Shikoyat']));
-      wrap.appendChild(perksBar);
-    }
+    // Commands now live in the compact left menu to keep the table open.
 
     // Perk reveal overlay
     if (perkReveal) renderPerkReveal();
 
     // ── Bottom info bar ──────────────────────────────────────────
-    const meColorIdx = avatarColorFor(me?.id || me?.username);
-    const myAvatar = h('div', {
-      class: `avatar md color-${meColorIdx}`,
-      style: 'position:relative',
-      'data-player-id': me?.id || '',
-    }, [avatarLetter(me?.username || '')]);
+    const myAvatar = renderPlayerAvatar(me || state.user, {
+      mine: true,
+      title: 'Stikerlar',
+      onclick: () => openStickerPicker(),
+      dataPlayer: true,
+    });
+    if (activePlayer?.id === me?.id && view.turnDeadline) {
+      const remaining = Math.max(0, (view.turnDeadline - Date.now()) / 1000);
+      myAvatar.appendChild(makeTimerRing(remaining, turnTotalSeconds(view)));
+    }
     if (forfeitedId === me?.id) {
       myAvatar.appendChild(h('span', { class: 'white-flag-badge mine' }, [
         h('i', {}, []),
@@ -1475,26 +2469,24 @@ export async function renderGame(root, params) {
     }
     if (myPayout) {
       myAvatar.appendChild(h('span', { class: 'mini-payout-pop mine' }, [`+${formatGameMoney(myPayout)}`]));
+    } else if (view.phase === 'ended' && view.durakId === me?.id) {
+      myAvatar.appendChild(h('span', { class: 'mini-payout-pop mine loss' }, [`-${formatGameMoney(view.stake)}`]));
     }
     if (speechByPlayer[me?.id]) {
       myAvatar.appendChild(makeSpeechBubble(me.id));
+    }
+    if (stickerByPlayer[me?.id]) {
+      const stickerBubble = makeStickerBubble(me.id);
+      if (stickerBubble) myAvatar.appendChild(stickerBubble);
     }
     wrap.appendChild(h('div', { class: 'bottom-info-bar' }, [
       h('div', { class: 'me-info' }, [
         myAvatar,
         h('div', {}, [
-          h('div', { class: 'name-line' }, [me?.nickname ? `@${me.nickname}` : me?.username || '']),
+          h('div', { class: 'name-line' }, [displayGameName(me)]),
           h('div', { class: 'stat-line' }, [`💰 ${(state.user?.coins || 0) >= 1000 ? `${Math.round(state.user.coins/100)/10}K` : state.user?.coins || 0}`]),
         ]),
       ]),
-      h('button', {
-        class: 'btn-icon',
-        onclick: () => {
-          sfx.play('click');
-          setChatPanel(true);
-        },
-        title: 'Chat',
-      }, ['💬']),
       pref('pref_emotions', state.user) ? h('button', {
         class: 'btn-icon',
         onclick: () => openStickerPicker(),
@@ -1506,15 +2498,10 @@ export async function renderGame(root, params) {
       ]),
     ].filter(Boolean)));
 
-    // ── My hand (with highlights) ────────────────────────────────
+    // ── My hand ─────────────────────────────────────────────────
     const hand = h('div', { class: 'my-hand' });
     if (me?.hand) {
       const sorted = [...me.hand].sort((a, b) => {
-        if (pref('pref_turn_sorting', state.user)) {
-          const ap = highlights.has(a.rank + a.suit) ? 1 : 0;
-          const bp = highlights.has(b.rank + b.suit) ? 1 : 0;
-          if (ap !== bp) return bp - ap;
-        }
         if (pref('pref_sort_value', state.user)) {
           if (a.value !== b.value) return a.value - b.value;
           if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
@@ -1527,30 +2514,18 @@ export async function renderGame(root, params) {
       });
       sorted.forEach((c, i) => {
         const isTrump = c.suit === view.trumpSuit;
-        const canPlay = highlights.has(c.rank + c.suit);
+        const canPlay = canAttemptCardPlay(view, me);
         const cardEl = renderCard(c, { extraClass: isTrump ? 'trump' : '', skin: activeCardSkin });
+        cardEl.dataset.cardId = cardWireId(c);
         if (selectedCard && c.rank === selectedCard.rank && c.suit === selectedCard.suit) cardEl.classList.add('selected');
-        if (!canPlay && (isMyTurnAttacker(me) || isMyTurnDefender(me))) {
-          cardEl.style.opacity = '.55';
-          cardEl.style.filter = 'grayscale(.4)';
-        } else if (canPlay) {
-          cardEl.style.boxShadow = isTrump
-            ? '0 0 0 2px #60d98a, 0 0 18px rgba(96,217,138,.4), 0 6px 18px rgba(216,179,95,.3)'
-            : '0 0 0 2px rgba(96,217,138,.65), 0 0 14px rgba(96,217,138,.35), 0 6px 16px rgba(0,0,0,.55)';
-        }
-        if (dealingHand) {
+        if (dealingHand && !liteRender) {
           cardEl.classList.add('dealing');
-          cardEl.style.animationDelay = `${i * 0.08}s`;
+          cardEl.style.animationDelay = `${i * 0.1}s`;
         }
         attachDragToPlay(cardEl, c, canPlay, me);
         cardEl.addEventListener('click', () => {
           if (cardEl.dataset.dragPlayed === '1') return;
           if (isMyTurnAttacker(me) || isMyTurnDefender(me)) {
-            if (!canPlay) {
-              sfx.play('error');
-              toast('Bu karta bilan yurib bo\'lmaydi', 'error');
-              return;
-            }
             const cardId = c.rank + c.suit;
             if (pref('pref_double_tap', state.user)) {
               const now = Date.now();
@@ -1562,20 +2537,18 @@ export async function renderGame(root, params) {
               }
               lastTapCardId = cardId;
               lastTapAt = now;
-              selectedCard = c;
+              selectCardFast(c);
               sfx.play('click');
               vibrate(8);
               toast('Yana bir marta bosing - karta yuradi', 'info', 900);
-              scheduleRender();
               return;
             }
             sfx.play('click');
-            selectedCard = c;
+            selectCardFast(c);
             vibrate(8);
-            toast('Endi URISH tugmasini bosing yoki kartani stolga suring', 'info');
-            scheduleRender();
+            toast(tSafe('game.press_attack_hint', 'Endi URISH tugmasini bosing yoki kartani stolga suring'), 'info');
           } else {
-            toast('Sizning navbatingiz emas', 'error');
+            toast(tSafe('game.not_your_turn', 'Sizning navbatingiz emas'), 'error');
             sfx.play('error');
           }
         });
@@ -1583,22 +2556,27 @@ export async function renderGame(root, params) {
       });
     }
     wrap.appendChild(hand);
-    requestAnimationFrame(() => applyFanLayout(hand));
+    requestAnimationFrame(() => applyFanLayout(hand, { lite: liteRender }));
 
     // ── End game overlay ─────────────────────────────────────────
     if (view.phase === 'ended') {
       const winnerId = view.winnerOrder?.[0];
       const winner = view.players.find((p) => p.id === winnerId);
-      const isDraw = !view.durakId && view.players.length === 0;
+      const isDraw = !view.durakId;
       const isForfeitEnd = !!forfeitInfo;
       const quitter = view.players.find((p) => p.id === forfeitedId);
+      const loser = view.players.find((p) => p.id === view.durakId);
       const payoutRows = (view.payoutShares || [])
         .filter((s) => s.playerId !== forfeitedId && Number(s.amount || 0) > 0);
-      const meWon = isForfeitEnd ? myPayout > 0 : (winner && winner.id === me?.id);
+      const resultRows = [
+        ...payoutRows.map((s) => ({ ...s, amount: Number(s.amount || 0), kind: 'win' })),
+        loser ? { playerId: loser.id, amount: -Number(view.stake || 0), kind: 'loss' } : null,
+      ].filter(Boolean);
+      const meWon = myPayout > 0 || (!isForfeitEnd && winner && winner.id === me?.id);
       const cls = meWon ? 'win' : (isDraw ? 'draw' : 'lose');
       const title = isDraw
         ? 'DURANG'
-        : (isForfeitEnd ? `${quitter?.username || 'O\'yinchi'} chiqib ketdi` : (meWon ? 'G\'ALABA!' : (winner ? `${winner.username} yutdi` : 'O\'YIN TUGADI')));
+        : (isForfeitEnd ? `${displayGameName(quitter) || 'O\'yinchi'} chiqib ketdi` : (meWon ? 'G\'ALABA!' : (winner ? `${displayGameName(winner)} yutdi` : 'O\'YIN TUGADI')));
 
       const overlay = h('div', { class: `end-overlay${isForfeitEnd ? ' forfeit-end-overlay' : ''}` }, [
         h('div', { class: 'result-card' }, [
@@ -1609,13 +2587,13 @@ export async function renderGame(root, params) {
               : (view.durakId ? `Durak: ${view.players.find((p) => p.id === view.durakId)?.username || ''}` : ''),
           ]),
           meWon ? h('div', {
-            style: 'margin-top:18px;font-size:24px;font-weight:900;color:var(--rc-gold-bright)'
+            class: 'demo-result-prize',
           }, [`+ ${formatGameMoney(myPayout || view.stake * view.players.length)}`]) : null,
-          isForfeitEnd && payoutRows.length ? h('div', { class: 'payout-list' }, payoutRows.map((s) => {
+          resultRows.length ? h('div', { class: 'payout-list demo-payout-list' }, resultRows.map((s) => {
             const p = view.players.find((pl) => pl.id === s.playerId);
-            return h('div', {}, [
-              h('span', {}, [p?.username || 'o‘yinchi']),
-              h('b', {}, [`+${formatGameMoney(s.amount)}`]),
+            return h('div', { class: s.kind === 'loss' ? 'loss-row' : 'win-row' }, [
+              h('span', {}, [displayGameName(p) || 'o‘yinchi']),
+              h('b', {}, [`${s.amount > 0 ? '+' : ''}${formatGameMoney(s.amount)}`]),
             ]);
           })) : null,
           h('button', {
@@ -1642,8 +2620,6 @@ export async function renderGame(root, params) {
       if (meWon && !confettiShown && pref('pref_reward_anim', state.user)) { confettiShown = true; dropWinnerConfetti(); }
     }
 
-    if (liveChat.length) renderLiveChatFeed();
-    if (chatOpen) renderChat();
     if (stickerOpen) renderStickerPanel();
   }
 
@@ -1664,8 +2640,8 @@ export async function renderGame(root, params) {
         .catch(() => {});
     }
     const now = Date.now();
-    if (!timerNodeCache.length || now - timerCacheAt > 1200) {
-      timerNodeCache = Array.from(wrap.querySelectorAll('.opp-slot.turn .turn-timer, .royal-turn-panel .turn-timer'));
+    if (!timerNodeCache.length || now - timerCacheAt > 2500) {
+      timerNodeCache = Array.from(wrap.querySelectorAll('.opp-slot.turn .turn-timer, .bottom-info-bar .turn-timer, .royal-turn-panel .turn-timer'));
       timerCacheAt = now;
     }
     for (const ring of timerNodeCache) {
@@ -1683,6 +2659,7 @@ export async function renderGame(root, params) {
 
   const cleanup = () => {
     if (timerInterval) clearInterval(timerInterval);
+    stopPregameReadyClock();
     if (loadingWatchdog) clearTimeout(loadingWatchdog);
     if (perkRevealTimer) clearTimeout(perkRevealTimer);
     liveChatTimers.forEach((timer) => clearTimeout(timer));
@@ -1691,9 +2668,11 @@ export async function renderGame(root, params) {
     if (renderFrame) cancelAnimationFrame(renderFrame);
     if (renderTimer) clearTimeout(renderTimer);
     if (onRuntimePrefChange) window.removeEventListener('imperia:pref-change', onRuntimePrefChange);
+    stopVoice({ emitEnd: true });
     document.documentElement.classList.remove('game-perf-mode');
     document.querySelector('.game-sticker-sheet-bg')?.remove();
     timerNodeCache = [];
+    socket.off('room:state', onRoomState);
     socket.off('chat:message', onChatMessage);
     socket.off('game:start', onGameStart);
     socket.off('game:move', onGameMove);
@@ -1712,108 +2691,32 @@ export async function renderGame(root, params) {
     socket.off('emoji:react', onEmojiReact);
     socket.off('sticker:show', onStickerShow);
     socket.off('room:error', onRoomError);
+    socket.off('voice:request', onVoiceRequest);
+    socket.off('voice:accept', onVoiceAccept);
+    socket.off('voice:offer', onVoiceOffer);
+    socket.off('voice:answer', onVoiceAnswer);
+    socket.off('voice:ice', onVoiceIce);
+    socket.off('voice:reject', onVoiceReject);
+    socket.off('voice:timeout', onVoiceTimeout);
+    socket.off('voice:error', onVoiceError);
+    socket.off('voice:end', onVoiceEnd);
+    socket.off('game:action_confirm_request', onActionConfirmRequest);
+    socket.off('game:action_confirm_waiting', onActionConfirmWaiting);
+    socket.off('game:action_confirm_rejected', onActionConfirmRejected);
+    socket.off('game:action_confirm_cancelled', onActionConfirmCancelled);
+    socket.off('game:action_confirmed', onActionConfirmed);
+    closeActionConfirmModal();
   };
   window.addEventListener('beforeunload', cleanup, { once: true });
 
   function renderChat() {
     const existing = wrap.querySelector('.chat-panel');
     if (existing) existing.remove();
-    if (!chatOpen) return;
-    if (!isTextChatAllowed()) {
-      chatOpen = false;
-      toast("Yozishish faqat 1 ga 1 o'yinda ishlaydi", 'info');
-      return;
-    }
-    const panel = h('div', { class: 'chat-panel' });
-    panel.appendChild(h('div', { class: 'chat-panel-head' }, [
-      h('strong', {}, ['Chat']),
-      h('button', {
-        class: 'chat-close-btn',
-        type: 'button',
-        title: 'Yopish',
-        onclick: () => {
-          sfx.play('click');
-          setChatPanel(false);
-        },
-      }, ['×']),
-    ]));
-    const msgs = h('div', { class: 'chat-msgs' });
-    for (const m of chatLog) {
-      msgs.appendChild(h('div', { class: 'chat-msg' }, [
-        h('span', { class: 'name' }, [`${m.senderName || m.username || ''}: `]),
-        h('span', {}, [m.content || m.text || '']),
-      ]));
-    }
-    panel.appendChild(msgs);
-    const input = h('input', { placeholder: 'Xabar...' });
-    const send = h('button', {
-      class: 'btn-secondary',
-      onclick: () => {
-        const content = String(input.value || '').trim();
-        if (!content) return;
-        sfx.play('click');
-        send.disabled = true;
-        socket.emit('chat:message', { code, content, type: 'text' }, (res) => {
-          send.disabled = false;
-          if (!res?.ok) toast(res?.error || 'Xabar yuborilmadi', 'error');
-          else input.focus();
-        });
-        input.value = '';
-      },
-    }, ['→']);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send.click(); });
-    panel.appendChild(h('div', { class: 'chat-input-row' }, [input, send]));
-    if (pref('pref_emotions', state.user)) {
-      const grid = h('div', { class: 'emoji-grid' });
-      if (ownedEmojiCache?.length) {
-        for (const e of ownedEmojiCache.slice(0, 24)) {
-          grid.appendChild(h('button', {
-            class: 'emoji-btn owned-emoji-btn',
-            title: e.name,
-            onclick: () => {
-              sfx.play('click');
-              socket.emit('chat:message', { code, content: e.label, type: 'emoji' });
-            },
-          }, [e.label]));
-        }
-      } else if (!loadingOwnedEmoji) {
-        loadingOwnedEmoji = true;
-        api.inventoryGrouped().then((data) => {
-          ownedEmojiCache = [];
-          for (const pack of data?.emoji || []) {
-            for (const item of pack.owned || []) {
-              ownedEmojiCache.push({
-                name: `${pack.name} ${item.emojiId}`,
-                label: emojiLabelFromPack(pack.packId, item.emojiId),
-              });
-            }
-          }
-          loadingOwnedEmoji = false;
-          if (chatOpen) renderChat();
-        }).catch(() => { loadingOwnedEmoji = false; });
-      }
-      for (const e of ['😀','😂','🤔','😎','😡','🥳','👍','👎','❤️','🔥','💯','🎉','🎴','🃏','♠','♥','♦','♣']) {
-        grid.appendChild(h('button', {
-          class: 'emoji-btn',
-          onclick: () => { sfx.play('click'); socket.emit('chat:message', { code, content: e, type: 'emoji' }); },
-        }, [e]));
-      }
-      panel.appendChild(grid);
-    }
-    wrap.appendChild(panel);
+    chatOpen = false;
   }
 
   function renderLiveChatFeed() {
-    const feed = h('div', { class: 'game-chat-feed' });
-    for (const m of liveChat.slice(-3)) {
-      const sender = m.senderName || m.username || 'Player';
-      const content = String(m.content || m.text || '').slice(0, 120);
-      feed.appendChild(h('div', { class: `game-chat-bubble ${m.type || 'text'}` }, [
-        h('span', { class: 'game-chat-sender' }, [`${sender}: `]),
-        h('span', { class: 'game-chat-text' }, [content]),
-      ]));
-    }
-    wrap.appendChild(feed);
+    wrap.querySelector('.game-chat-feed')?.remove();
   }
 
   function renderPerkReveal() {
@@ -1832,10 +2735,10 @@ export async function renderGame(root, params) {
     } else if (perkReveal.kind === 'best_move_hint' && perkReveal.hint) {
       const hint = perkReveal.hint;
       let text = 'Aniq yo\'l yo\'q';
-      if (hint.action === 'wait_for_turn') text = 'Navbatingizni kuting';
-      else if (hint.card) text = `${hint.action === 'defense' ? 'Uring: ' : 'Yurish: '}${hint.card.rank === 'T' ? '10' : hint.card.rank}${SUIT_GLYPH[hint.card.suit]}`;
+      if (hint.action === 'wait_for_turn') text = t('game.perk_wait_turn');
+      else if (hint.card) text = `${hint.action === 'defense' ? tSafe('game.hint_defend_prefix', 'Uring: ') : tSafe('game.hint_attack_prefix', 'Yurish: ')}${hint.card.rank === 'T' ? '10' : hint.card.rank}${SUIT_GLYPH[hint.card.suit]}`;
       else if (hint.action === 'take') text = 'Eng yaxshi: olish';
-      else if (hint.action === 'pass') text = 'Eng yaxshi: pas';
+      else if (hint.action === 'pass') text = t('game.perk_best_pass');
       overlay.appendChild(h('div', { style: 'font-size:14px;font-weight:700' }, ['🧠 ' + text]));
     }
     overlay.appendChild(h('button', {
@@ -1874,7 +2777,7 @@ export async function renderGame(root, params) {
       h('div', { class: 'game-sticker-sheet-head' }, [
         h('div', {}, [
           h('b', {}, ['Stickerlar']),
-          h('small', {}, ['Olingan sticker packlardan yuboring']),
+          h('small', {}, ['Oddiy bepul va olingan stickerlar']),
         ]),
         h('button', { class: 'chat-close-btn', onclick: closeSheet }, ['×']),
       ]),
@@ -1892,7 +2795,9 @@ export async function renderGame(root, params) {
 
     const fillGrid = (packs = []) => {
       grid.innerHTML = '';
-      const available = (packs || []).filter((p) => Number(p.owned || 0) > 0 || Number(p.priceGold || 0) === 0);
+      const available = withStarterStickerPack(packs)
+        .filter((p) => Number(p.owned || 0) > 0 || Number(p.priceGold || 0) === 0)
+        .filter((p) => Array.isArray(p.stickers) && p.stickers.length);
       if (!available.length) {
         grid.appendChild(h('div', { class: 'game-sticker-loading' }, [
           'Avval do\'kondan sticker pack oling',
@@ -1902,31 +2807,57 @@ export async function renderGame(root, params) {
       }
       for (const pack of available) {
         for (const s of (pack.stickers || [])) {
+          const stickerNo = String(s.name || s.id || '').match(/#?(\d+)$/)?.[1] || String((pack.stickers || []).indexOf(s) + 1);
+          const initials = String(pack.name || 'ST').replace(/[^a-z0-9]+/gi, ' ').trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'ST';
           grid.appendChild(h('button', {
             class: 'game-sticker-btn',
-            title: s.name,
-            onclick: async () => {
+            style: {
+              '--sticker-color': pack.themeColor || '#e0b15d',
+              '--sticker-panel': pack.panelColor || 'rgba(10,18,26,.95)',
+            },
+            title: s.name || `${pack.name || 'Sticker'} #${stickerNo}`,
+            onclick: async (event) => {
+              const btn = event.currentTarget;
+              if (btn?.disabled) return;
+              if (btn) {
+                btn.disabled = true;
+                btn.classList.add('is-sending');
+              }
               sfx.play('click');
               try {
-                await api.stickerSend(s.id, code);
+                const result = await api.stickerSend(s.id, code);
                 closeSheet();
+                if (result?.sticker?.img) onStickerShow(result.sticker);
               } catch (err) {
+                if (btn) {
+                  btn.disabled = false;
+                  btn.classList.remove('is-sending');
+                }
                 toast(err.message || 'Stiker yuborilmadi', 'error');
               }
             },
           }, [
+            h('span', { class: 'game-sticker-fallback' }, [
+              h('b', {}, [initials]),
+              h('i', {}, [`#${stickerNo}`]),
+            ]),
             h('img', {
               src: s.img,
-              alt: s.name,
-              onerror: (e) => { e.currentTarget.style.display = 'none'; },
+              alt: s.name || `${pack.name || 'Sticker'} #${stickerNo}`,
+              loading: 'lazy',
+              onload: (e) => e.currentTarget.closest('.game-sticker-btn')?.classList.add('has-sticker-img'),
+              onerror: (e) => {
+                e.currentTarget.style.display = 'none';
+                e.currentTarget.closest('.game-sticker-btn')?.classList.add('broken-sticker-img');
+              },
             }),
-            h('small', {}, [String(s.name || '').replace(/^.*#/, '#')]),
+            h('small', {}, [`#${stickerNo}`]),
           ]));
         }
       }
     };
 
-    if (stickerInventoryCache) {
+    if (stickerInventoryCache && Date.now() - stickerInventoryCacheAt < 15000) {
       fillGrid(stickerInventoryCache);
       return;
     }
@@ -1937,9 +2868,17 @@ export async function renderGame(root, params) {
     }
     if (!stickerInventoryLoading) {
       stickerInventoryLoading = true;
-      api.stickerInventory()
-        .then((packs) => {
-          stickerInventoryCache = packs || [];
+      Promise.all([
+        api.stickerInventory().catch(() => []),
+        api.stickerFree ? api.stickerFree().catch(() => []) : Promise.resolve([]),
+      ])
+        .then(([ownedPacks, freePacks]) => {
+          const byId = new Map();
+          for (const pack of withStarterStickerPack([...(freePacks || []), ...(ownedPacks || [])])) {
+            byId.set(pack.id, { ...(byId.get(pack.id) || {}), ...pack, owned: Math.max(Number(pack.owned || 0), Number(pack.priceGold || 0) === 0 ? 1 : 0) });
+          }
+          stickerInventoryCache = Array.from(byId.values());
+          stickerInventoryCacheAt = Date.now();
           stickerInventoryError = '';
         })
         .catch((err) => {
@@ -2002,6 +2941,8 @@ export class VoiceChatManager {
     this.peerConnection = null;
     this.active = false;
     this.requesting = false;
+    this.pendingIce = [];
+    this.requestTimer = null;
     this._ui = null;
 
     // Socket events
@@ -2010,6 +2951,9 @@ export class VoiceChatManager {
     this._onVoiceOffer   = this._onVoiceOffer.bind(this);
     this._onVoiceAnswer  = this._onVoiceAnswer.bind(this);
     this._onVoiceIce     = this._onVoiceIce.bind(this);
+    this._onVoiceReject  = this._onVoiceReject.bind(this);
+    this._onVoiceTimeout = this._onVoiceTimeout.bind(this);
+    this._onVoiceError   = this._onVoiceError.bind(this);
     this._onVoiceEnd     = this._onVoiceEnd.bind(this);
 
     socket.on('voice:request', this._onVoiceRequest);
@@ -2017,6 +2961,9 @@ export class VoiceChatManager {
     socket.on('voice:offer',   this._onVoiceOffer);
     socket.on('voice:answer',  this._onVoiceAnswer);
     socket.on('voice:ice',     this._onVoiceIce);
+    socket.on('voice:reject',  this._onVoiceReject);
+    socket.on('voice:timeout', this._onVoiceTimeout);
+    socket.on('voice:error',   this._onVoiceError);
     socket.on('voice:end',     this._onVoiceEnd);
   }
 
@@ -2069,7 +3016,18 @@ export class VoiceChatManager {
   // Ovoz so'rovi yuborish
   requestVoice() {
     this.requesting = true;
-    this.socket.emit('voice:request', { code: this.roomCode });
+    if (this.requestTimer) clearTimeout(this.requestTimer);
+    this.requestTimer = setTimeout(() => {
+      if (!this.requesting) return;
+      this.socket.emit('voice:end', { code: this.roomCode, reason: 'request-timeout' });
+      this._cleanup();
+      this._toast('Ovozli chat so‘rovi javobsiz qoldi', 'info');
+    }, VOICE_REQUEST_TIMEOUT_MS);
+    this.socket.emit('voice:request', { code: this.roomCode }, (res) => {
+      if (res?.ok) return;
+      this._cleanup();
+      this._toast(res?.error || 'Ovozli chat ochilmadi', 'error');
+    });
     this._toast('🎙️ Ovoz so\'rovi yuborildi. Sherik javobini kuting...', 'info');
     if (this._ui) this._ui.innerHTML = '⏳ So\'rov yuborildi...';
   }
@@ -2103,14 +3061,16 @@ export class VoiceChatManager {
     };
     overlay.querySelector('#voice-reject').onclick = () => {
       overlay.remove();
-      this.socket.emit('voice:end', { code: this.roomCode });
+      this.socket.emit('voice:reject', { code: this.roomCode });
     };
 
     // 30 soniya timeout
-    setTimeout(() => { if (overlay.parentNode) { overlay.remove(); this.socket.emit('voice:end', { code: this.roomCode }); } }, 30000);
+    setTimeout(() => { if (overlay.parentNode) { overlay.remove(); this.socket.emit('voice:reject', { code: this.roomCode }); } }, VOICE_REQUEST_TIMEOUT_MS);
   }
 
   _onVoiceAccept() {
+    if (this.requestTimer) clearTimeout(this.requestTimer);
+    this.requestTimer = null;
     this.requesting = false;
     this._startVoice(true);
   }
@@ -2119,7 +3079,7 @@ export class VoiceChatManager {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
-      const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+      const config = { iceServers: voiceIceServers() };
       this.peerConnection = new RTCPeerConnection(config);
 
       for (const track of this.localStream.getTracks()) {
@@ -2139,6 +3099,13 @@ export class VoiceChatManager {
         document.body.appendChild(audio);
       };
 
+      this.peerConnection.onconnectionstatechange = () => {
+        if (this.peerConnection?.connectionState === 'failed') this.endVoice();
+      };
+      this.peerConnection.oniceconnectionstatechange = () => {
+        if (this.peerConnection?.iceConnectionState === 'failed') this.endVoice();
+      };
+
       if (isInitiator) {
         const offer = await this.peerConnection.createOffer();
         await this.peerConnection.setLocalDescription(offer);
@@ -2150,25 +3117,62 @@ export class VoiceChatManager {
       this._toast('🎙️ Ovozli suhbat boshlandi!', 'success');
     } catch (e) {
       this._toast('Mikrofonga ruxsat yo\'q: ' + (e.message || 'Xatolik'), 'error');
+      this.socket.emit('voice:end', { code: this.roomCode, reason: 'media-error' });
+      this._cleanup();
     }
   }
 
   async _onVoiceOffer(data) {
-    if (!this.peerConnection) return;
-    await this.peerConnection.setRemoteDescription(data.offer);
-    const answer = await this.peerConnection.createAnswer();
-    await this.peerConnection.setLocalDescription(answer);
-    this.socket.emit('voice:answer', { code: this.roomCode, answer });
+    try {
+      if (!this.peerConnection) await this._startVoice(false);
+      if (!this.peerConnection) return;
+      await this.peerConnection.setRemoteDescription(data.offer);
+      await this._flushIce();
+      const answer = await this.peerConnection.createAnswer();
+      await this.peerConnection.setLocalDescription(answer);
+      this.socket.emit('voice:answer', { code: this.roomCode, answer });
+    } catch (_) {
+      this.endVoice();
+    }
   }
 
   async _onVoiceAnswer(data) {
     if (!this.peerConnection) return;
     await this.peerConnection.setRemoteDescription(data.answer);
+    await this._flushIce();
   }
 
   async _onVoiceIce(data) {
-    if (!this.peerConnection) return;
+    if (!data?.candidate) return;
+    if (!this.peerConnection?.remoteDescription) {
+      this.pendingIce.push(data.candidate);
+      return;
+    }
     try { await this.peerConnection.addIceCandidate(data.candidate); } catch (_) {}
+  }
+
+  async _flushIce() {
+    if (!this.peerConnection?.remoteDescription) return;
+    const queue = this.pendingIce;
+    this.pendingIce = [];
+    for (const candidate of queue) {
+      try { await this.peerConnection.addIceCandidate(candidate); } catch (_) {}
+    }
+  }
+
+  _onVoiceReject() {
+    this._cleanup();
+    this._toast('Ovozli chat rad etildi', 'info');
+  }
+
+  _onVoiceTimeout() {
+    this._cleanup();
+    this._toast('Ovozli chat so‘rovi javobsiz qoldi', 'info');
+  }
+
+  _onVoiceError(data = {}) {
+    this._cleanup();
+    this._toast(data.error || 'Ovozli chat xatosi', 'error');
   }
 
   // Istalgan tomon o'chirsa — ikkala tomonda o'chadi (Band 30)
@@ -2178,7 +3182,7 @@ export class VoiceChatManager {
   }
 
   endVoice() {
-    this.socket.emit('voice:end', { code: this.roomCode });
+    this.socket.emit('voice:end', { code: this.roomCode, reason: 'client-cleanup' });
     this._cleanup();
     this._toast('🎙️ Ovoz o\'chirildi', 'info');
   }
@@ -2186,6 +3190,9 @@ export class VoiceChatManager {
   _cleanup() {
     this.active = false;
     this.requesting = false;
+    this.pendingIce = [];
+    if (this.requestTimer) clearTimeout(this.requestTimer);
+    this.requestTimer = null;
     if (this.localStream) { this.localStream.getTracks().forEach(t => t.stop()); this.localStream = null; }
     if (this.peerConnection) { try { this.peerConnection.close(); } catch (_) {} this.peerConnection = null; }
     const remoteAudio = document.getElementById('voice-remote-audio');
@@ -2200,6 +3207,9 @@ export class VoiceChatManager {
     this.socket.off('voice:offer',   this._onVoiceOffer);
     this.socket.off('voice:answer',  this._onVoiceAnswer);
     this.socket.off('voice:ice',     this._onVoiceIce);
+    this.socket.off('voice:reject',  this._onVoiceReject);
+    this.socket.off('voice:timeout', this._onVoiceTimeout);
+    this.socket.off('voice:error',   this._onVoiceError);
     this.socket.off('voice:end',     this._onVoiceEnd);
   }
 
@@ -2237,7 +3247,7 @@ function buildMoveSuggestion(view, me) {
     const card = lowestCard(sameSuit.length ? sameSuit : trumps);
     return card
       ? `Himoyada ${cardLabel(card)} bilan ${cardLabel(attack)} ni uring. Kozirni zarur bolmasa saqlang.`
-      : `${cardLabel(attack)} ni uradigan karta yoq. Olish yaxshiroq, keyin kichik kartalarni chiqarishga harakat qiling.`;
+      : tSafe('game.hint_take_better', `${cardLabel(attack)} ni uradigan karta yoq. Olish yaxshiroq, keyin kichik kartalarni chiqarishga harakat qiling.`, { card: cardLabel(attack) });
   }
   if (view.phase === 'attacking' && isAttacker) {
     const ranks = new Set();

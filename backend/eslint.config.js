@@ -11,7 +11,10 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        setImmediate: 'readonly',
+        structuredClone: 'readonly',
         URL: 'readonly',
+        URLSearchParams: 'readonly',
         // Node 20+ globalThis builtins used by iap.js / push.js.
         fetch: 'readonly',
         AbortController: 'readonly',

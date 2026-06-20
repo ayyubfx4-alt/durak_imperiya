@@ -74,7 +74,7 @@ assertContains('web-client/public/src/realtime.js', 'Wallet/profile live refresh
 ]);
 
 assertContains('web-client/public/src/main.js', 'Live countdown modules are cache-busted', [
-  'home.js?v=146-live-countdown',
+  'home.js?v=172-home-scope-fix',
   'leaderboard.js?v=147-live-ui',
   'tournaments.js?v=147-live-ui',
 ]);

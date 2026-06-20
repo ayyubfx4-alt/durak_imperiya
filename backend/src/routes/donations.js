@@ -17,9 +17,10 @@ const ALLOW_DEV_DONATION = process.env.ALLOW_DEV_PURCHASES === '1' && config.env
  */
 donationsRouter.get('/', async (req, res, next) => {
   try {
-    const limit = Number(req.query.limit) || 100;
-    const rows = await topDonors(limit);
-    res.json(rows.map((r) => ({
+    const limit = Math.min(Number(req.query.limit) || 100, 100);
+    const rows = await topDonors(limit, { includeFake: true });
+    res.json(rows.map((r, i) => ({
+      rank: i + 1,
       id: r.id,
       userId: r.user_id,
       name: r.display_name,
@@ -34,9 +35,10 @@ donationsRouter.get('/', async (req, res, next) => {
 
 donationsRouter.get('/real', async (req, res, next) => {
   try {
-    const limit = Number(req.query.limit) || 100;
-    const rows = await topDonors(limit);
-    res.json(rows.map((r) => ({
+    const limit = Math.min(Number(req.query.limit) || 100, 100);
+    const rows = await topDonors(limit, { includeFake: false });
+    res.json(rows.map((r, i) => ({
+      rank: i + 1,
       id: r.id,
       userId: r.user_id,
       name: r.display_name,
@@ -94,7 +96,7 @@ donationsRouter.get('/leaderboard/users', async (_req, res, next) => {
          FROM users u
         WHERE u.total_donated_cents > 0
         ORDER BY u.total_donated_cents DESC, u.username ASC
-        LIMIT 50`
+        LIMIT 100`
     );
     res.json(r.rows.map((row) => ({
       userId: row.id,

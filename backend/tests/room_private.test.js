@@ -58,6 +58,55 @@ test('private rooms are listed publicly without exposing the password', () => {
   manager.destroy(room.code);
 });
 
+test('room snapshots include player avatar metadata', () => {
+  const manager = new RoomManager(fakeIo());
+  const room = manager.createRoom({
+    maxPlayers: 2,
+    stake: 100,
+    host: { id: 'u1', username: 'host', avatar_url: '/host.png' },
+  });
+  room.join({
+    id: 'u1',
+    username: 'host',
+    nickname: 'boss',
+    avatar_url: '/host.png',
+    selected_avatar_frame: 'royal',
+    socketId: 's1',
+    isBot: false,
+  });
+
+  const snapshotSeat = room.lobbySnapshot().seats[0];
+  const listSeat = manager.publicList()[0].seats[0];
+  assert.equal(snapshotSeat.avatar_url, '/host.png');
+  assert.equal(snapshotSeat.nickname, 'boss');
+  assert.equal(snapshotSeat.selected_avatar_frame, 'royal');
+  assert.equal(listSeat.avatar_url, '/host.png');
+
+  manager.destroy(room.code);
+});
+
+test('public room list is cached and invalidated on lobby changes', () => {
+  const manager = new RoomManager(fakeIo());
+  const room = manager.createRoom({
+    maxPlayers: 2,
+    stake: 100,
+    host: { id: 'u1', username: 'host' },
+  });
+  room.join({ id: 'u1', username: 'host', socketId: 's1', isBot: false });
+
+  const first = manager.publicList();
+  const second = manager.publicList();
+  assert.equal(second, first);
+  assert.equal(first[0].taken, 1);
+
+  room.join({ id: 'u2', username: 'guest', socketId: 's2', isBot: false });
+  const afterJoin = manager.publicList();
+  assert.notEqual(afterJoin, first);
+  assert.equal(afterJoin[0].taken, 2);
+
+  manager.destroy(room.code);
+});
+
 test('private invite allows passwordless join but still blocks bots', async () => {
   const manager = new RoomManager(fakeIo());
   const room = manager.createRoom({

@@ -5,3 +5,17 @@ window.__DURAK_API_BASE__ = "";
 
 
 
+
+
+
+
+
+// Performance flags for APK/WebView
+window.__DURAK_PERF_LITE__ = true;        // Force perf-lite on native
+window.__DURAK_DISABLE_BLUR__ = true;     // Disable backdrop-filter
+window.__DURAK_MAX_FPS__ = 15;            // Max 15 FPS on native
+window.__DURAK_DISABLE_PARTICLES__ = true; // No particle effects
+
+
+
+

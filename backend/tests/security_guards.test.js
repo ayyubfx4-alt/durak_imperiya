@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { parseCard } from '../src/game/deck.js';
 import { createGame, playAttack, playDefense, transferAttack } from '../src/game/engine.js';
 import { normalizeMatchmakerOptions } from '../src/game/matchmaker.js';
@@ -12,6 +14,10 @@ import {
   checkSocketPacketRateLimit,
   normalizeAllowedTableSize,
 } from '../src/game/socketGuards.js';
+
+const srcRoot = resolve(import.meta.dirname, '..', 'src');
+const repoRoot = resolve(import.meta.dirname, '..', '..');
+const readSrc = (relPath) => readFileSync(resolve(srcRoot, relPath), 'utf8');
 
 test('deck parser rejects malformed card ids without throwing', () => {
   assert.equal(parseCard(null), null);
@@ -118,4 +124,61 @@ test('AdMob SSV parser rejects reordered signature params', () => {
     () => parseAdMobSsvQuery('transaction_id=x&key_id=1&signature=abc'),
     /key_id|required|signature/
   );
+});
+
+test('admin progression routes are behind permission middleware', () => {
+  const admin = readSrc('routes/admin.js');
+  assert.match(
+    admin,
+    /adminRouter\.use\(enforceAdminRoutePermission\);[\s\S]*adminRouter\.get\('\/progression\/thresholds'/
+  );
+});
+
+test('generic admin user update requires roles.manage before changing admin flag', () => {
+  const admin = readSrc('routes/admin.js');
+  assert.match(admin, /wantsAdminChange/);
+  assert.match(admin, /hasAdminPermission\(req\.user, \['roles\.manage'\]\)/);
+  assert.match(admin, /adminFlagChanged/);
+});
+
+test('manual tournament settlement requires tournament management permission', () => {
+  const tournaments = readSrc('routes/tournaments.js');
+  assert.match(
+    tournaments,
+    /tournamentsRouter\.post\('\/:id\/settle', authRequired, adminRequired, adminPermission\(\['tournaments\.manage'\]\)/
+  );
+});
+
+test('sticker pack gifts debit locked inventory before crediting recipient', () => {
+  const gifts = readSrc('services/gifts.js');
+  assert.match(gifts, /item_type = 'sticker_pack'[\s\S]*FOR UPDATE/);
+  assert.match(gifts, /SET quantity = quantity - 1[\s\S]*RETURNING quantity/);
+  assert.match(gifts, /sticker pack was already gifted/);
+});
+
+test('friend gifts are limited to extra collectible stickers and random cards', () => {
+  const friends = readSrc('routes/friends.js');
+  const gifts = readSrc('services/gifts.js');
+  const eligibility = readSrc('services/giftEligibility.js');
+  assert.match(friends, /gift\/coins'[\s\S]*collectibleGiftOnly/);
+  assert.match(friends, /gift\/gold'[\s\S]*collectibleGiftOnly/);
+  assert.match(friends, /gift\/emoji'[\s\S]*collectibleGiftOnly/);
+  assert.match(friends, /gift\/badge'[\s\S]*collectibleGiftOnly/);
+  assert.doesNotMatch(gifts, /giftGold|giftEmojiPack|giftBadge/);
+  assert.match(gifts, /only extra random card skins can be gifted/);
+  assert.match(gifts, /only extra non-purchased sticker packs can be gifted/);
+  assert.match(eligibility, /metadata->>'packId'/);
+  assert.match(eligibility, /metadata->>'itemType' = 'card_skin'/);
+});
+
+test('frontend gift modal hides money gifts and sticker picker has visible fallback', () => {
+  const friends = readFileSync(resolve(repoRoot, 'web-client', 'public', 'src', 'pages', 'friends.js'), 'utf8');
+  const api = readFileSync(resolve(repoRoot, 'web-client', 'public', 'src', 'api.js'), 'utf8');
+  const game = readFileSync(resolve(repoRoot, 'web-client', 'public', 'src', 'pages', 'game.js'), 'utf8');
+  assert.doesNotMatch(friends, /giftGold|Gold Coin|giftCoins|Durak \$/);
+  assert.doesNotMatch(api, /giftEmoji|giftBadge|\/api\/friends\/gift\/emoji|\/api\/friends\/gift\/badge/);
+  assert.match(friends, /Number\(p\.giftable \|\| 0\) > 0/);
+  assert.match(friends, /Number\(skin\.giftable \|\| 0\) > 0/);
+  assert.match(game, /game-sticker-fallback/);
+  assert.match(game, /game-sticker-overlay-fallback/);
 });

@@ -78,6 +78,7 @@ export const api = {
 
   guest: () => request('POST', '/api/auth/guest'),
   google: (idToken) => request('POST', '/api/auth/google', { idToken }),
+  telegram: (initData) => request('POST', '/api/auth/telegram', { initData }),
   register: (body) => request('POST', '/api/auth/register', body),
   login: (body) => request('POST', '/api/auth/login', body),
   me: () => request('GET', '/api/auth/me'),
@@ -86,6 +87,7 @@ export const api = {
   setNickname: (nickname) => request('POST', '/api/auth/nickname', { nickname }),
   setLocale: (locale) => request('POST', '/api/auth/me/locale', { locale }),
   updateProfile: (body) => request('POST', '/api/users/me/profile', body),
+  setCountry: (countryCode) => request('PATCH', '/api/users/me/country', { countryCode }),
   getSettings: () => request('GET', '/api/users/me/settings'),
   saveSettings: (settings) => request('POST', '/api/users/me/settings', { settings }),
   resetSettings: () => request('POST', '/api/users/me/settings/reset'),
@@ -93,6 +95,7 @@ export const api = {
   setBadges: (badges) => request('POST', '/api/auth/me/badges', { badges }),
 
   leaderboard: (sort = 'season', limit = 100) => request('GET', `/api/users/leaderboard?sort=${encodeURIComponent(sort)}&limit=${limit}`),
+  countryLeaderboard: () => request('GET', '/api/users/countries/stats'),
   leaderboardOverview: () => request('GET', '/api/users/leaderboard/overview'),
   leaderboardMe: (sort = 'season') => request('GET', `/api/users/leaderboard/me?sort=${encodeURIComponent(sort)}`),
   profile: (id) => request('GET', `/api/users/profile/${id}`),
@@ -148,6 +151,7 @@ export const api = {
 
   // PRO v5: Sticker pack endpoints
   stickerPacks: () => request('GET', '/api/stickers/packs'),
+  stickerFree: () => request('GET', '/api/stickers/free'),
   stickerInventory: () => request('GET', '/api/stickers/me'),
   stickerBuy: (packId) => request('POST', '/api/stickers/buy', { packId }),
   stickerSend: (stickerId, roomCode) => request('POST', '/api/stickers/send', { stickerId, roomCode }),
@@ -162,13 +166,12 @@ export const api = {
   friendRequest: (friendId) => request('POST', '/api/friends/request', { friendId }),
   friendAccept: (friendId) => request('POST', '/api/friends/accept', { friendId }),
   friendRemove: (friendId) => request('POST', '/api/friends/remove', { friendId }),
-  giftCoins: (friendId, amount) => request('POST', '/api/friends/gift/coins', { friendId, amount }),
-  giftGold: (friendId, amount) => request('POST', '/api/friends/gift/gold', { friendId, amount }),
-  giftEmoji: (friendId, packId, message) => request('POST', '/api/friends/gift/emoji', { friendId, packId, message }),
   giftSticker: (friendId, packId, message) => request('POST', '/api/friends/gift/sticker', { friendId, packId, message }),
   giftSkin: (friendId, skinId, message) => request('POST', '/api/friends/gift/skin', { friendId, skinId, message }),
-  giftBadge: (friendId, badgeId, message) => request('POST', '/api/friends/gift/badge', { friendId, badgeId, message }),
   giftInbox: () => request('GET', '/api/friends/gifts/inbox'),
+  friendMessagesUnread: () => request('GET', '/api/friends/messages/unread'),
+  friendMessages: (friendId, limit = 80) => request('GET', `/api/friends/messages/${encodeURIComponent(friendId)}?limit=${encodeURIComponent(limit)}`),
+  sendFriendMessage: (friendId, content) => request('POST', `/api/friends/messages/${encodeURIComponent(friendId)}`, { content }),
 
   reportSubmit: (body) => request('POST', '/api/reports', body),
 

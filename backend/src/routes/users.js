@@ -142,7 +142,7 @@ usersRouter.get('/leaderboard', async (req, res, next) => {
           ? 'elon_stickers DESC, sheriff_marks DESC, games_won DESC'
           : 'rank_wins DESC, games_won DESC';
     const r = await query(
-      `SELECT id, username, nickname, avatar_url, coins, gold_coins, rank_wins, rank_color, rank_lines, rank_pluses,
+      `SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins, rank_wins, rank_color, rank_lines, rank_pluses,
               games_won, games_played, win_streak, loss_streak, sheriff_marks, elon_stickers, total_donated_cents,
               ROW_NUMBER() OVER (ORDER BY ${orderBy}, id ASC)::int AS position
          FROM users
@@ -166,7 +166,7 @@ usersRouter.get('/leaderboard/overview', async (_req, res, next) => {
            FROM users WHERE is_banned = FALSE AND is_admin IS NOT TRUE AND is_bot IS NOT TRUE`
       ),
       query(
-        `SELECT id, username, nickname, avatar_url, coins, gold_coins, rank_wins, rank_color,
+        `SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins, rank_wins, rank_color,
                 games_won, games_played, win_streak
            FROM users
           WHERE is_banned = FALSE AND is_admin IS NOT TRUE AND is_bot IS NOT TRUE
@@ -205,7 +205,7 @@ usersRouter.get('/leaderboard/me', authRequired, async (req, res, next) => {
         : 'rank_wins';
     const r = await query(
       `WITH ranked AS (
-         SELECT id, username, nickname, avatar_url, coins, gold_coins, rank_wins, rank_color,
+         SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins, rank_wins, rank_color,
                 games_won, games_played, win_streak,
                 ROW_NUMBER() OVER (ORDER BY ${orderCol} DESC, rank_wins DESC, games_won DESC, id ASC) AS rank
            FROM users
@@ -234,7 +234,7 @@ usersRouter.post('/me/profile', authRequired, async (req, res, next) => {
     if (!sets.length) return res.json({ ok: true });
     const r = await query(
       `UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $1
-       RETURNING id, username, nickname, avatar_url, coins, gold_coins, settings_json AS settings`,
+       RETURNING id, username, nickname, avatar_url, coins, country_code, gold_coins, settings_json AS settings`,
       params
     );
     res.json({ ok: true, user: r.rows[0] });
@@ -278,11 +278,47 @@ usersRouter.post('/me/settings/reset', authRequired, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+usersRouter.patch('/me/country', authRequired, async (req, res, next) => {
+  try {
+    const countryCode = String(req.body?.countryCode || req.body?.country_code || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(countryCode)) return res.status(400).json({ error: 'invalid country' });
+    const r = await query(
+      `UPDATE users
+          SET country_code = $2,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING id, username, nickname, country_code`,
+      [req.user.id, countryCode]
+    );
+    res.json({ ok: true, user: r.rows[0] });
+  } catch (err) { next(err); }
+});
+
+usersRouter.get('/countries/stats', async (_req, res, next) => {
+  try {
+    const r = await query(
+      `SELECT COALESCE(country_code, 'ZZ') AS country_code,
+              COUNT(*)::int AS total_players,
+              COALESCE(SUM(games_won), 0)::int AS total_wins,
+              COALESCE(SUM(games_played), 0)::int AS total_games,
+              CASE WHEN COALESCE(SUM(games_played), 0) > 0
+                   THEN ROUND((SUM(games_won)::numeric / NULLIF(SUM(games_played), 0)) * 100, 2)
+                   ELSE 0 END AS win_rate
+         FROM users
+        WHERE is_banned = FALSE AND is_admin IS NOT TRUE AND is_bot IS NOT TRUE
+        GROUP BY COALESCE(country_code, 'ZZ')
+        ORDER BY total_wins DESC, total_players DESC, country_code ASC
+        LIMIT 250`
+    );
+    res.json(r.rows);
+  } catch (err) { next(err); }
+});
+
 usersRouter.get('/profile/:id', async (req, res, next) => {
   try {
     await syncUserGameStats(req.params.id);
     const r = await query(
-      `SELECT id, username, nickname, avatar_url, coins, gold_coins,
+      `SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins,
               rank_wins, rank_color, rank_lines, rank_pluses, rank_progress,
               games_played, games_won, games_lost, games_draw,
               win_streak, loss_streak, bluffs_caught, bluffs_made, sheriff_marks, elon_stickers,
@@ -312,7 +348,7 @@ usersRouter.get('/me/showcase', authRequired, async (req, res, next) => {
   try {
     await syncUserGameStats(req.user.id);
     const u = await query(
-      `SELECT id, username, nickname, avatar_url, coins, gold_coins,
+      `SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins,
               rank_wins, rank_color, rank_lines, rank_pluses, rank_progress,
               games_played, games_won, games_lost, games_draw,
               win_streak, loss_streak, bluffs_caught, sheriff_marks,
@@ -325,7 +361,7 @@ usersRouter.get('/me/showcase', authRequired, async (req, res, next) => {
 
     await grantAvailableProfileRewards(req.user.id, user);
     const fresh = await query(
-      `SELECT id, username, nickname, avatar_url, coins, gold_coins,
+      `SELECT id, username, nickname, avatar_url, coins, country_code, gold_coins,
               rank_wins, rank_color, rank_lines, rank_pluses, rank_progress,
               games_played, games_won, games_lost, games_draw,
               win_streak, loss_streak, bluffs_caught, sheriff_marks,
@@ -390,6 +426,12 @@ usersRouter.get('/me/showcase', authRequired, async (req, res, next) => {
         priceGold: p.priceGold,
         owned: stickerOwned.get(p.id) || 0,
         total: p.size,
+        size: p.size,
+        themeColor: p.themeColor,
+        themeGlow: p.themeGlow,
+        panelColor: p.panelColor,
+        tag: p.tag,
+        preview: p.stickers.slice(0, 8),
         stickers: p.stickers,
       })),
       emojiPacks: EMOJI_PACKS.slice(0, 16).map((p) => {

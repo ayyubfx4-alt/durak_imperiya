@@ -1,10 +1,10 @@
-// Achievement / event popup system — stacks toast-style cards in the
+﻿// Achievement / event popup system — stacks toast-style cards in the
 // bottom-right corner with a celebratory glow + sound. Used by the socket
 // layer when `achievement:unlock` is received.
 //
 // Multiple unlocks shown simultaneously are spaced 800ms apart so the
 // "ding" sounds don't pile up. The container auto-removes after 5s.
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 
 let container = null;
 const queue = [];

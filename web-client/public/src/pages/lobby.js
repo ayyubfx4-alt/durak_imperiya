@@ -6,7 +6,8 @@ import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
 import { connectSocket, emitWithAck } from '../socket.js';
 import { t } from '../i18n.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
+import { createDemoRoomPayload, openDemoPasswordPad, renderDemoRoomRow, withDemoBotTables } from '../demoTables.js?v=194-stickers-pregame-avatar-fix';
 
 // TOR §4.1 bet tiers — backend config.js bilan bir xil
 const DEFAULT_BET_TIERS = (() => {
@@ -24,9 +25,10 @@ function getTiers() {
   ];
 }
 
-function tSafe(key, fallback) {
+function tSafe(key, fallback, vars = {}) {
   const value = t(key);
-  return value && value !== key ? value : fallback;
+  const text = value && value !== key ? value : fallback;
+  return String(text).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
 }
 
 function formatStake(n) {
@@ -35,9 +37,19 @@ function formatStake(n) {
   return String(n);
 }
 
+function nextQuickTableSize() {
+  const sizes = [3, 2, 3, 4];
+  let index = 0;
+  try {
+    index = Number(localStorage.getItem('durak.quick.table.index') || 0);
+    localStorage.setItem('durak.quick.table.index', String(index + 1));
+  } catch (_) { /* ignore */ }
+  return sizes[Math.abs(index) % sizes.length];
+}
+
 export async function renderLobby(root, params = {}) {
   root.innerHTML = '';
-  const wrap = h('div', { class: 'screen bg-lobby' });
+  const wrap = h('div', { class: 'screen bg-lobby lobby-screen' });
   root.appendChild(wrap);
 
   let activeTier = 0;
@@ -45,13 +57,14 @@ export async function renderLobby(root, params = {}) {
   let allRooms = [];
   let activeFilters = { cards: true, throwIn: false, bluff: false, private: true, speed: true, fast: false, coin: true };
   let openedPrivateFromRoute = false;
+  let openedCreateFromRoute = false;
   let privateRoomsBg = null;
   const TIERS = getTiers();
 
   // ── Top bar ──────────────────────────────────────────────────────────
   wrap.appendChild(h('div', { class: 'lobby-topbar' }, [
     h('button', { class: 'btn-icon', onclick: () => { sfx.play('click'); navigate('home'); } }, ['◀']),
-    h('div', { class: 'title' }, ['Stollar']),
+    h('div', { class: 'title' }, [tSafe('lobby.title', 'Stollar')]),
     h('div', { class: 'coins' }, [`$${(state.user?.coins || 0).toLocaleString()}`]),
   ]));
 
@@ -74,17 +87,17 @@ export async function renderLobby(root, params = {}) {
 
   // ── Filter Bar (rasm 3 dagi filter ikonkalar) ────────────────────────
   const filtersBar = h('div', { class: 'filters-bar' });
-  filtersBar.appendChild(h('div', { class: 'header' }, ['Filtr sozlamalari']));
+  filtersBar.appendChild(h('div', { class: 'header' }, [tSafe('lobby.filter', 'Filtr sozlamalari')]));
   const icons = h('div', { class: 'icons' }, [
     h('div', { class: 'ic-grp' }, [
-      filterIc('🃏', 'cards', 'Klassik'),
-      filterIc('↻', 'throwIn', 'Tashlash'),
-      filterIc('🎭', 'bluff', 'Aldash'),
-      filterIc('🔒', 'private', 'Yopiq'),
+      filterIc('🃏', 'cards', tSafe('lobby.filter_cards', 'Klassik')),
+      filterIc('↻', 'throwIn', tSafe('lobby.filter_throw_in', 'Tashlash')),
+      filterIc('🎭', 'bluff', tSafe('lobby.filter_bluff', 'Aldash')),
+      filterIc('🔒', 'private', tSafe('lobby.filter_private', 'Yopiq')),
     ]),
     h('div', { class: 'ic-grp' }, [
-      filterIc('▶', 'speed', 'O\'rta tezlik'),
-      filterIc('▶▶', 'fast', 'Tez'),
+      filterIc('▶', 'speed', tSafe('lobby.filter_speed', 'O\'rta tezlik')),
+      filterIc('▶▶', 'fast', tSafe('lobby.filter_fast', 'Tez')),
       h('div', { style: 'font-size:11px;color:var(--rc-text-muted);margin:0 4px' }, ['100-1K']),
       h('div', { class: 'ic active' }, ['💰']),
     ]),
@@ -110,8 +123,84 @@ export async function renderLobby(root, params = {}) {
       class: 'btn-big green',
       style: 'min-height:48px;font-size:16px',
       onclick: () => quickMatch(),
-    }, ['⚡  TEZ O\'YIN — avtomatik stol topish']),
+    }, [`⚡  ${tSafe('lobby.quick_match', 'TEZ O\'YIN — avtomatik stol topish')}`]),
   ]));
+
+  // ── Table Creation Card (Inline Panel) ──────────────────────────────
+  let betIndex = Math.max(0, DEFAULT_BET_TIERS.indexOf(1000));
+  const updateBet = () => {
+    const value = DEFAULT_BET_TIERS[betIndex] || 1000;
+    const out = createPanel.querySelector('[data-bet-value]');
+    const range = createPanel.querySelector('[data-key=betRange]');
+    if (out) out.textContent = value.toLocaleString('ru-RU');
+    if (range) range.value = String(betIndex);
+  };
+
+  const createPanel = h('div', { class: 'create-room-modal create-room-3d inline-create-panel' }, [
+    h('div', { class: 'create-bet-top' }, [
+      h('span', {}, ['Tikish miqdori']),
+      h('strong', { 'data-bet-value': '1000' }, ['1 000']),
+      h('i', {}, ['$']),
+    ]),
+    h('div', { class: 'create-slider-wrap' }, [
+      (() => {
+        const range = h('input', {
+          type: 'range',
+          min: '0',
+          max: String(DEFAULT_BET_TIERS.length - 1),
+          value: String(betIndex),
+          'data-key': 'betRange',
+          class: 'bet-slider pro-slider',
+        });
+        range.addEventListener('input', () => { betIndex = Number(range.value); updateBet(); });
+        return range;
+      })(),
+      h('div', { class: 'slider-marks' }, [
+        h('span', {}, ['100']), h('span', {}, ['1K']), h('span', {}, ['10K']), h('span', {}, ['100K']), h('span', {}, ['1M']),
+      ]),
+    ]),
+    h('div', { class: 'create-section-title' }, ['O\'yinchilar']),
+    segmented('players players-segment', [['2','2'],['3','3'],['4','4'],['6','6']], '2'),
+    h('div', { class: 'create-two-cols' }, [
+      h('div', {}, [h('div', { class: 'create-section-title small' }, ['Karta soni']), segmented('deckSize', [['24','24'],['36','36'],['52','52']], '36')]),
+      h('div', {}, [h('div', { class: 'create-section-title small' }, ['Yurish vaqti']), segmented('turnSeconds', [['30','30s'],['15','15s']], '30')]),
+    ]),
+    h('div', { class: 'create-section-title' }, ['Qoidalar']),
+    h('div', { class: 'mode-tile-grid' }, [
+      modeTile('transfer', 'Tashlash', '↪', true, 'throwStyle'),
+      modeTile('neighbors', 'Yonlar', '⇄', true, 'throwScope'),
+      modeTile('bluff', 'Aldash', '🎩', false, 'tricks'),
+      modeTile('classic', 'Oddiy', '♣', true),
+      modeTile('passing', 'O\'tkazish', '↻', false, 'throwStyle'),
+      modeTile('allThrow', 'Hamma', '×', false, 'throwScope'),
+      modeTile('fairPlay', 'Halol', '✓', true, 'tricks'),
+      modeTile('drawMode', 'Durrang', '□', true),
+    ]),
+    h('div', { class: 'private-create-row' }, [
+      switchRow('priv', 'Yopiq xona'),
+      h('input', { 'data-key': 'password', type: 'tel', inputmode: 'numeric', pattern: '[0-9]*', placeholder: '4 xonali parol, masalan 1111', maxlength: '4', autocomplete: 'off' }),
+      h('button', { class: 'create-play-button', onclick: async () => submitCreateInline() }, [
+        h('span', {}, ['Stol ochish']), h('b', {}, ['▶']),
+      ]),
+    ]),
+  ]);
+
+  updateBet();
+  const privateToggle = createPanel.querySelector('[data-key=priv]');
+  const passwordInput = createPanel.querySelector('[data-key=password]');
+  const syncPrivatePassword = () => {
+    if (!passwordInput || !privateToggle) return;
+    passwordInput.style.display = privateToggle.checked ? 'block' : 'none';
+    passwordInput.disabled = !privateToggle.checked;
+    if (!privateToggle.checked) passwordInput.value = '';
+  };
+  privateToggle?.addEventListener('change', syncPrivatePassword);
+  passwordInput?.addEventListener('input', () => {
+    passwordInput.value = passwordInput.value.replace(/\D/g, '').slice(0, 4);
+  });
+  syncPrivatePassword();
+
+  wrap.appendChild(createPanel);
 
   // ── Room List ────────────────────────────────────────────────────────
   const list = h('div', { class: 'scroll' });
@@ -127,29 +216,29 @@ export async function renderLobby(root, params = {}) {
     const label = document.createElement('label');
     label.htmlFor = id;
     label.appendChild(cb);
-    label.appendChild(document.createTextNode(`${n} kishi`));
+    label.appendChild(document.createTextNode(tSafe('lobby.size_people', `${n} kishi`, { count: n })));
     sizeBar.appendChild(label);
   });
-  sizeBar.appendChild(h('button', { class: 'btn-new', onclick: () => { sfx.play('click'); promptCreate(); } }, ['YANGI STOL']));
+  sizeBar.appendChild(h('button', { class: 'btn-new', onclick: () => { sfx.play('click'); promptCreate(); } }, [tSafe('lobby.new_table', 'YANGI STOL')]));
   wrap.appendChild(sizeBar);
 
   // ── Bottom Navigation (rasm 3 da pastdagi tugmalar) ──────────────────
   wrap.appendChild(h('div', { class: 'bottom-tabs' }, [
     h('div', { class: 'tab', onclick: () => { sfx.play('click'); navigate('profile'); } }, [
       h('span', { class: 'ic' }, ['♣']),
-      h('div', {}, ['Profil']),
+      h('div', {}, [tSafe('nav.profile', 'Profil')]),
     ]),
     h('div', { class: 'tab active' }, [
       h('span', { class: 'ic' }, ['♥']),
-      h('div', {}, ['Stollar']),
+      h('div', {}, [tSafe('nav.tables', 'Stollar')]),
     ]),
     h('div', { class: 'tab', onclick: () => { sfx.play('click'); openPrivateRoomsList(); } }, [
       h('span', { class: 'ic' }, ['🔒']),
-      h('div', {}, ['Yopiq']),
+      h('div', {}, [tSafe('nav.private', 'Yopiq')]),
     ]),
     h('div', { class: 'tab', onclick: () => { sfx.play('click'); promptCreate(); } }, [
       h('span', { class: 'ic' }, ['➕']),
-      h('div', {}, ['Yaratish']),
+      h('div', {}, [tSafe('nav.create', 'Yaratish')]),
     ]),
   ]));
 
@@ -168,6 +257,15 @@ export async function renderLobby(root, params = {}) {
       return true;
     });
 
+    filtered = withDemoBotTables(filtered, {
+      minRows: 6,
+      maxRows: 14,
+      minStake: prevTierMax,
+      maxStake: tier.maxStake,
+      sizeFilter,
+      bluffOnly: activeFilters.bluff,
+    });
+
     if (!filtered.length) {
       list.appendChild(h('div', { class: 'p-16 text-c muted', style: 'padding:40px 16px;font-size:14px' }, [
         h('div', { style: 'font-size:42px;margin-bottom:10px;opacity:.5' }, ['🎴']),
@@ -177,31 +275,10 @@ export async function renderLobby(root, params = {}) {
     }
 
     for (const r of filtered) {
-      const taken = r.seats.filter(Boolean).length;
-      const names = r.seats.filter(Boolean).map(s => s.username).join(', ') || '—';
-
-      const row = h('div', { class: `room-row${r.isPrivate ? ' private-room-row' : ''}`, onclick: () => joinRoom(r.code, '', r) }, [
-        h('div', { class: 'left' }, [
-          h('div', { class: 'names' }, [names]),
-          h('div', { class: 'meta' }, [
-            h('span', { class: 'stake' }, [`💰 $${formatStake(r.stake)}`]),
-            r.isPrivate ? h('span', { class: 'private-badge' }, ['🔒 Yopiq']) : null,
-            Number.isFinite(Number(r.realCount)) ? h('span', {}, [`Real ${r.realCount}/${r.maxPlayers}`]) : null,
-            h('span', {}, [`👤 ${taken}/${r.maxPlayers}`]),
-            h('span', {}, [`🃏 ${r.deckSize || 36}`]),
-            h('span', {}, [`⏱ ${r.turnSeconds || 30}s`]),
-          ].filter(Boolean)),
-        ]),
-        h('div', { class: 'right' }, [
-          h('div', { class: 'mode-icons' }, [
-            h('div', { class: 'ic' }, ['36']),
-            r.bluffEnabled ? h('div', { class: 'ic' }, ['🎭']) : null,
-            r.isPrivate ? h('div', { class: 'ic' }, ['🔒']) : null,
-          ].filter(Boolean)),
-          h('div', { class: 'arrow' }, ['›']),
-        ]),
-      ]);
-      list.appendChild(row);
+      list.appendChild(renderDemoRoomRow(r, {
+        formatStake,
+        onJoin: (room) => joinRoom(room.code, '', room),
+      }));
     }
   }
 
@@ -223,15 +300,23 @@ export async function renderLobby(root, params = {}) {
     list.innerHTML = '';
     list.appendChild(h('div', { class: 'game-flow-error-card lobby-error-card' }, [
       h('div', { class: 'game-flow-error-icon' }, ['!']),
-      h('h2', {}, ['Server bilan aloqa yo\'q']),
-      h('p', {}, [err.message || 'Stollar ro\'yxati yuklanmadi.']),
-      h('button', { class: 'btn-big green mt-16', onclick: () => renderLobby(root) }, ['Qayta urinish']),
+      h('h2', {}, [tSafe('lobby.no_connection', 'Server bilan aloqa yo\'q')]),
+      h('p', {}, [err.message || tSafe('lobby.load_failed', 'Stollar ro\'yxati yuklanmadi.')]),
+      h('button', { class: 'btn-big green mt-16', onclick: () => renderLobby(root) }, [tSafe('lobby.retry', 'Qayta urinish')]),
     ]));
+  }
+
+  if ((params.create === '1' || params.create === 'true') && !openedCreateFromRoute) {
+    openedCreateFromRoute = true;
+    setTimeout(promptCreate, 80);
   }
 
   // ── Actions ──────────────────────────────────────────────────────────
   async function joinRoom(code, password = '', roomInfo = null) {
     sfx.play('click');
+    if (roomInfo?.syntheticBotTable) {
+      return joinSyntheticBotRoom(roomInfo);
+    }
     if (roomInfo?.isPrivate && !password) {
       return promptPasswordForRoom(roomInfo);
     }
@@ -240,36 +325,28 @@ export async function renderLobby(root, params = {}) {
       return promptPasswordForRoom({ code });
     }
     if (!resp?.ok) return toast(resp?.error || 'Qo\'shilib bo\'lmadi', 'error');
-    navigate('room', { code });
+    navigate('game', { code });
+  }
+
+  async function joinSyntheticBotRoom(room) {
+    const stake = Number(room.stake || 0);
+    if (Number(state.user?.coins || 0) < stake) {
+      toast('Balansingiz yetarli emas', 'error');
+      return;
+    }
+    const created = await emitWithAck('room:create', createDemoRoomPayload(room), 5000).catch((err) => ({ ok: false, error: err.message }));
+    if (!created?.ok) return toast(created?.error || 'Stol yaratib bo\'lmadi', 'error');
+    await emitWithAck('room:fill-bots', { code: created.code }, 5000).catch(() => null);
+    state.currentRoom = { code: created.code };
+    navigate('game', { code: created.code });
   }
 
   function promptPasswordForRoom(room) {
-    const taken = Array.isArray(room.seats) ? room.seats.filter(Boolean).length : 0;
-    const card = h('div', { class: 'modal private-password-modal' }, [
-      h('h2', {}, ['🔒 Yopiq stol']),
-      h('div', { class: 'private-room-code' }, ['Parol kerak']),
-      h('div', { class: 'private-room-safe-meta' }, [
-        h('span', {}, [`$${formatStake(room.stake || 0)}`]),
-        h('span', {}, [`${taken}/${room.maxPlayers || '?'}`]),
-        h('span', {}, [`${room.deckSize || 36} karta`]),
-        h('span', {}, [`${room.turnSeconds || 30}s`]),
-      ]),
-      h('p', {}, ['Bu stol yopiq. Kirish uchun parolni kiriting.']),
-      h('input', { id: '_room_pass', type: 'password', placeholder: 'Parol', maxlength: '24', autocomplete: 'off' }),
-      h('div', { class: 'row mt-16 gap-12' }, [
-        h('button', { class: 'btn-secondary grow', onclick: () => bg.remove() }, ['Bekor']),
-        h('button', { class: 'btn-big green grow', style: 'width:auto;min-height:auto;padding:13px', onclick: async () => {
-          const password = (card.querySelector('#_room_pass').value || '').trim();
-          if (!password) return toast('Parol kiriting', 'error');
-          bg.remove();
-          await joinRoom(room.code, password);
-        }}, ['Kirish']),
-      ]),
-    ]);
-    const bg = h('div', { class: 'modal-bg' }, [card]);
-    bg.addEventListener('click', e => { if (e.target === bg) bg.remove(); });
-    root.appendChild(bg);
-    setTimeout(() => card.querySelector('#_room_pass')?.focus(), 50);
+    openDemoPasswordPad({
+      mount: document.body,
+      room,
+      onSubmit: async (password) => joinRoom(room.code, password),
+    });
   }
 
   function openPrivateRoomsList() {
@@ -278,34 +355,15 @@ export async function renderLobby(root, params = {}) {
       .filter((r) => r.isPrivate && r.state?.phase !== 'playing')
       .sort((a, b) => (b.taken || 0) - (a.taken || 0) || (a.stake || 0) - (b.stake || 0));
 
-    const rows = privateRooms.map((r) => {
-      const taken = Array.isArray(r.seats) ? r.seats.filter(Boolean).length : Number(r.taken || 0);
-      const names = Array.isArray(r.seats)
-        ? r.seats.filter(Boolean).map((s) => s.username).join(', ')
-        : '';
-      return h('button', {
-        class: 'private-room-list-item',
-        type: 'button',
-        onclick: () => {
-          privateRoomsBg = null;
-          bg.remove();
-          promptPasswordForRoom(r);
-        },
-      }, [
-        h('div', { class: 'private-room-list-top' }, [
-          h('strong', {}, [names || r.host || 'Yopiq stol']),
-          h('span', {}, ['Yopiq']),
-        ]),
-        h('div', { class: 'private-room-list-meta' }, [
-          h('span', {}, [`💰 $${formatStake(r.stake || 0)}`]),
-          h('span', {}, [`👤 ${taken}/${r.maxPlayers}`]),
-          h('span', {}, [`🃏 ${r.deckSize || 36}`]),
-          h('span', {}, [`⏱ ${r.turnSeconds || 30}s`]),
-          r.bluffEnabled ? h('span', {}, ['🎭 Aldash']) : null,
-        ].filter(Boolean)),
-        h('small', {}, ['Parol yashirilgan. Kirish uchun ustiga bosing.']),
-      ]);
-    });
+    const rows = privateRooms.map((r) => renderDemoRoomRow(r, {
+      privateList: true,
+      formatStake,
+      onJoin: (room) => {
+        privateRoomsBg = null;
+        bg.remove();
+        promptPasswordForRoom(room);
+      },
+    }));
 
     const card = h('div', { class: 'modal private-rooms-modal' }, [
       h('div', { class: 'private-rooms-head' }, [
@@ -353,19 +411,20 @@ export async function renderLobby(root, params = {}) {
     if (candidates.length) {
       const target = candidates[0];
       const resp = await emitWithAck('room:join', { code: target.code }, 4000).catch(() => ({ ok: false }));
-      if (resp?.ok) return navigate('room', { code: target.code });
+      if (resp?.ok) return navigate('game', { code: target.code });
     }
-    // 2. Topilmasa — yangi 2-kishilik tez stol yaratish
+    // 2. Topilmasa — tez stol o'yinchi sonini almashtirib yaratish
     const stake = Math.min(100, liveCoins);
     if (liveCoins < 100) {
       toast('100$ minimum tikish uchun yetarli mablag\' yo\'q', 'error');
       return;
     }
+    const maxPlayers = nextQuickTableSize();
     const resp = await emitWithAck('room:create', {
-      maxPlayers: 2, stake: 100, bluffEnabled: false, isPrivate: false, botLevel: 'medium',
+      maxPlayers, stake: 100, bluffEnabled: false, isPrivate: false, botLevel: 'medium',
     }, 4000).catch(e => ({ ok: false, error: e.message }));
     if (!resp?.ok) return toast(resp?.error || 'Stol yaratib bo\'lmadi', 'error');
-    navigate('room', { code: resp.code });
+    navigate('game', { code: resp.code });
   }
 
   function promptJoinPrivate() {
@@ -373,93 +432,26 @@ export async function renderLobby(root, params = {}) {
   }
 
   function promptCreate() {
-    let betIndex = Math.max(0, DEFAULT_BET_TIERS.indexOf(1000));
-    const updateBet = () => {
-      const value = DEFAULT_BET_TIERS[betIndex] || 1000;
-      const out = card.querySelector('[data-bet-value]');
-      const range = card.querySelector('[data-key=betRange]');
-      if (out) out.textContent = value.toLocaleString('ru-RU');
-      if (range) range.value = String(betIndex);
-    };
-    const card = h('div', { class: 'modal create-room-modal create-room-3d' }, [
-      h('div', { class: 'create-bet-top' }, [
-        h('span', {}, ['Tikish miqdori']),
-        h('strong', { 'data-bet-value': '1' }, ['1 000']),
-        h('i', {}, ['$']),
-      ]),
-      h('div', { class: 'create-slider-wrap' }, [
-        (() => {
-          const range = h('input', {
-            type: 'range',
-            min: '0',
-            max: String(DEFAULT_BET_TIERS.length - 1),
-            value: String(betIndex),
-            'data-key': 'betRange',
-            class: 'bet-slider pro-slider',
-          });
-          range.addEventListener('input', () => { betIndex = Number(range.value); updateBet(); });
-          return range;
-        })(),
-        h('div', { class: 'slider-marks' }, [
-          h('span', {}, ['100']), h('span', {}, ['1K']), h('span', {}, ['10K']), h('span', {}, ['100K']), h('span', {}, ['1M']),
-        ]),
-      ]),
-      h('div', { class: 'create-section-title' }, ['O\'yinchilar']),
-      segmented('players players-segment', [['2','2'],['3','3'],['4','4'],['6','6']], '2'),
-      h('div', { class: 'create-two-cols' }, [
-        h('div', {}, [h('div', { class: 'create-section-title small' }, ['Karta soni']), segmented('deckSize', [['24','24'],['36','36'],['52','52']], '36')]),
-        h('div', {}, [h('div', { class: 'create-section-title small' }, ['Yurish vaqti']), segmented('turnSeconds', [['30','30s'],['15','15s']], '30')]),
-      ]),
-      h('div', { class: 'create-section-title' }, ['Qoidalar']),
-      h('div', { class: 'mode-tile-grid' }, [
-        modeTile('transfer', 'Tashlash', '↪', true, 'throwStyle'),
-        modeTile('neighbors', 'Yonlar', '⇄', true, 'throwScope'),
-        modeTile('bluff', 'Aldash', '🎩', false, 'tricks'),
-        modeTile('classic', 'Oddiy', '♣', true),
-        modeTile('passing', 'O\'tkazish', '↻', false, 'throwStyle'),
-        modeTile('allThrow', 'Hamma', '×', false, 'throwScope'),
-        modeTile('fairPlay', 'Halol', '✓', true, 'tricks'),
-        modeTile('drawMode', 'Durrang', '□', true),
-      ]),
-      h('div', { class: 'private-create-row' }, [
-        switchRow('priv', 'Yopiq xona'),
-        h('input', { 'data-key': 'password', placeholder: 'Parol, masalan 1111', maxlength: '24' }),
-        h('button', { class: 'create-play-button', onclick: async () => submitCreate(card, bg, betIndex) }, [
-          h('span', {}, ['Stol ochish']), h('b', {}, ['▶']),
-        ]),
-      ]),
-    ]);
-    updateBet();
-    const privateToggle = card.querySelector('[data-key=priv]');
-    const passwordInput = card.querySelector('[data-key=password]');
-    const syncPrivatePassword = () => {
-      if (!passwordInput || !privateToggle) return;
-      passwordInput.style.display = privateToggle.checked ? 'block' : 'none';
-      passwordInput.disabled = !privateToggle.checked;
-      if (!privateToggle.checked) passwordInput.value = '';
-    };
-    privateToggle?.addEventListener('change', syncPrivatePassword);
-    syncPrivatePassword();
-    const bg = h('div', { class: 'modal-bg room-create-bg' }, [card]);
-    bg.addEventListener('click', e => { if (e.target === bg) bg.remove(); });
-    root.appendChild(bg);
+    // lobby-screen o'zi scroll qiladigan div, shuning uchun
+    // createPanel.offsetTop ga scrollTo qilish to'g'ri ishlaydi
+    const offset = createPanel.offsetTop - 8;
+    wrap.scrollTo({ top: offset, behavior: 'smooth' });
   }
 
-  async function submitCreate(card, bg, betIndex) {
-    const players = Number(card.querySelector('[data-key="players players-segment"]')?.dataset.value || card.querySelector('[data-key=players]')?.dataset.value || 2);
+  async function submitCreateInline() {
+    const players = Number(createPanel.querySelector('[data-key="players players-segment"]')?.dataset.value || createPanel.querySelector('[data-key=players]')?.dataset.value || 2);
     const bet = DEFAULT_BET_TIERS[betIndex] || 1000;
-    const deckSize = Number(card.querySelector('[data-key=deckSize]')?.dataset.value || 36);
-    const turnSeconds = Number(card.querySelector('[data-key=turnSeconds]')?.dataset.value || 30);
-    const bluff = card.querySelector('[data-key=bluff]')?.checked || false;
-    const priv = card.querySelector('[data-key=priv]')?.checked || false;
-    const password = (card.querySelector('[data-key=password]')?.value || '').trim();
-    const passingEnabled = card.querySelector('[data-key=passing]')?.checked || false;
-    const throwInEnabled = card.querySelector('[data-key=transfer]')?.checked || false;
-    const throwInMode = card.querySelector('[data-key=allThrow]')?.checked ? 'all' : 'neighbor';
-    const allowDraw = card.querySelector('[data-key=drawMode]')?.checked !== false;
-    if (priv && !password) return toast('Yopiq xona uchun parol kiriting', 'error');
+    const deckSize = Number(createPanel.querySelector('[data-key=deckSize]')?.dataset.value || 36);
+    const turnSeconds = Number(createPanel.querySelector('[data-key=turnSeconds]')?.dataset.value || 30);
+    const bluff = createPanel.querySelector('[data-key=bluff]')?.checked || false;
+    const priv = createPanel.querySelector('[data-key=priv]')?.checked || false;
+    const password = (createPanel.querySelector('[data-key=password]')?.value || '').trim();
+    const passingEnabled = createPanel.querySelector('[data-key=passing]')?.checked || false;
+    const throwInEnabled = createPanel.querySelector('[data-key=transfer]')?.checked || false;
+    const throwInMode = createPanel.querySelector('[data-key=allThrow]')?.checked ? 'all' : 'neighbor';
+    const allowDraw = createPanel.querySelector('[data-key=drawMode]')?.checked !== false;
+    if (priv && !/^\d{4}$/.test(password)) return toast('Yopiq xona uchun 4 xonali raqamli parol kiriting', 'error');
     if (!throwInEnabled && !passingEnabled) return toast('Throw-in yoki passingdan bittasini tanlang', 'error');
-    bg.remove();
     await create({
       maxPlayers: players,
       stake: bet,
@@ -471,7 +463,7 @@ export async function renderLobby(root, params = {}) {
       allowDraw,
       isPrivate: priv,
       password,
-      mode: card.querySelector('[data-key=classic]')?.checked ? 'classic' : (passingEnabled ? 'passing' : 'throw-in'),
+      mode: createPanel.querySelector('[data-key=classic]')?.checked ? 'classic' : (passingEnabled ? 'passing' : 'throw-in'),
       botLevel: 'medium',
     });
   }
@@ -480,7 +472,7 @@ export async function renderLobby(root, params = {}) {
     sfx.play('click');
     const resp = await emitWithAck('room:create', opts, 5000).catch(e => ({ ok: false, error: e.message }));
     if (!resp?.ok) return toast(resp?.error || 'Xatolik', 'error');
-    navigate('room', { code: resp.code });
+    navigate('game', { code: resp.code });
   }
 }
 
@@ -572,4 +564,3 @@ function switchRow(key, label) {
   lab.appendChild(document.createTextNode(label));
   return lab;
 }
-

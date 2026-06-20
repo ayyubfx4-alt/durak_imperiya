@@ -1,15 +1,15 @@
 import { withTransaction } from '../db.js';
 
 export const PROFILE_REWARDS = [
-  { key: 'first_win_100k', title: 'Birinchi g‘alaba', metric: 'games_won', target: 1, rewardCoins: 100000, stickerPack: 'pack_basic' },
-  { key: 'wins_3_bronze', title: '3 g‘alaba', metric: 'games_won', target: 3, rewardCoins: 10000, stickerPack: 'pack_animals' },
-  { key: 'wins_5_silver', title: '5 g‘alaba', metric: 'games_won', target: 5, rewardCoins: 25000, stickerPack: 'pack_emotion' },
-  { key: 'wins_10_gold', title: '10 g‘alaba', metric: 'games_won', target: 10, rewardCoins: 50000, stickerPack: 'pack_royal' },
-  { key: 'wins_20_crown', title: '20 g‘alaba', metric: 'games_won', target: 20, rewardCoins: 75000, stickerPack: 'pack_neon' },
+  { key: 'first_win_100k', title: 'Birinchi g‘alaba', metric: 'games_won', target: 1, rewardCoins: 100000, stickerPack: 'pack_panda' },
+  { key: 'wins_3_bronze', title: '3 g‘alaba', metric: 'games_won', target: 3, rewardCoins: 10000, stickerPack: 'pack_koala' },
+  { key: 'wins_5_silver', title: '5 g‘alaba', metric: 'games_won', target: 5, rewardCoins: 25000, stickerPack: 'pack_cool_boy' },
+  { key: 'wins_10_gold', title: '10 g‘alaba', metric: 'games_won', target: 10, rewardCoins: 50000, stickerPack: 'pack_lion' },
+  { key: 'wins_20_crown', title: '20 g‘alaba', metric: 'games_won', target: 20, rewardCoins: 75000, stickerPack: 'pack_ninja' },
   { key: 'wins_50_trophy', title: '50 g‘alaba', metric: 'games_won', target: 50, rewardCoins: 150000, stickerPack: 'pack_dragon' },
-  { key: 'wins_100_legend', title: '100 g‘alaba', metric: 'games_won', target: 100, rewardCoins: 300000, stickerPack: 'pack_celestial' },
-  { key: 'games_25_drop', title: '25 o‘yin', metric: 'games_played', target: 25, rewardCoins: 15000, stickerPack: 'pack_funny' },
-  { key: 'games_100_drop', title: '100 o‘yin', metric: 'games_played', target: 100, rewardCoins: 60000, stickerPack: 'pack_gangster' },
+  { key: 'wins_100_legend', title: '100 g‘alaba', metric: 'games_won', target: 100, rewardCoins: 300000, stickerPack: 'pack_legend_queen' },
+  { key: 'games_25_drop', title: '25 o‘yin', metric: 'games_played', target: 25, rewardCoins: 15000, stickerPack: 'pack_clown' },
+  { key: 'games_100_drop', title: '100 o‘yin', metric: 'games_played', target: 100, rewardCoins: 60000, stickerPack: 'pack_pirate' },
   { key: 'draws_10_medal', title: '10 durang', metric: 'games_draw', target: 10, rewardCoins: 10000, badge: 'draws_10' },
   { key: 'draws_50_medal', title: '50 durang', metric: 'games_draw', target: 50, rewardCoins: 50000, badge: 'draws_50' },
   { key: 'draws_100_medal', title: '100 durang', metric: 'games_draw', target: 100, rewardCoins: 100000, badge: 'draws_100' },

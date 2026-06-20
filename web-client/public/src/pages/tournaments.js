@@ -1,9 +1,9 @@
-import { h } from '../ui.js';
+﻿import { h } from '../ui.js';
 import { api } from '../api.js';
 import { navigate } from '../router.js';
 import { state, toast } from '../state.js';
-import { avatarColorFor, avatarLetter } from '../cards.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { avatarColorFor, avatarLetter, flagEmoji } from '../cards.js';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { connectSocket } from '../socket.js';
 import { completeRoyalLoader, hideRoyalLoader, showRoyalLoader, updateRoyalLoader } from '../royalLoading.js?v=129-royal-loader-clean';
 
@@ -126,12 +126,32 @@ async function renderLiveDashboard(body, root, overview, cleanups = []) {
   const bracket = await loadBracket(tour);
   const entries = tour ? await api.tournamentEntries(tour.id).catch(() => []) : [];
   body.appendChild(renderHero(root, tour, overview, entries, cleanups));
-  body.appendChild(h('section', { class: 'rt-main-tabs' }, [
-    h('button', { class: 'active' }, ['Jonli']),
-    h('button', { onclick: () => scrollToSelector('.rt-bracket-card') }, ['Bracket']),
-    h('button', { onclick: () => scrollToSelector('.rt-top-card') }, ['Top o‘yinchilar']),
-    h('button', { onclick: () => scrollToSelector('.rt-info-grid') }, ['Ma’lumot']),
-  ]));
+  let _liveActiveTab = 'live';
+  const _liveTabs = h('section', { class: 'rt-main-tabs' }, []);
+
+  function _setLiveTab(key, selector) {
+    _liveActiveTab = key;
+    _liveTabs.querySelectorAll('button').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === key);
+    });
+    if (selector) scrollToSelector(selector);
+  }
+
+  [
+    { key: 'live',    label: 'Jonli',             selector: null },
+    { key: 'bracket', label: 'Bracket',           selector: '.rt-bracket-card' },
+    { key: 'top',     label: 'Top o‘yinchilar', selector: '.rt-top-card' },
+    { key: 'info',    label: 'Ma’lumot',       selector: '.rt-info-grid' },
+  ].forEach(({ key, label, selector }) => {
+    const _btn = h('button', {
+      class: key === _liveActiveTab ? 'active' : '',
+      onclick: () => _setLiveTab(key, selector),
+    }, [label]);
+    _btn.dataset.tab = key;
+    _liveTabs.appendChild(_btn);
+  });
+
+  body.appendChild(_liveTabs);
   body.appendChild(renderBracketCard(root, tour, bracket, entries, overview));
   body.appendChild(h('section', { class: 'rt-info-grid' }, [
     renderInfoCard(tour, overview),
@@ -298,7 +318,7 @@ function renderGiftPanel(root, tour, entries) {
     h('strong', {}, ['Tomoshabin sovg‘asi']),
     select,
     h('button', { onclick: () => sendGift(root, tour, select, 'emoji', 'classic:smile', 2) }, ['Emoji x2']),
-    h('button', { onclick: () => sendGift(root, tour, select, 'sticker_pack', 'pack_basic', 1) }, ['Sticker']),
+    h('button', { onclick: () => sendGift(root, tour, select, 'sticker_pack', 'pack_panda', 1) }, ['Sticker']),
   ]);
 }
 
@@ -335,7 +355,7 @@ function renderTopPlayers(players) {
     ...rows.map((p, idx) => h('div', { class: 'rt-top-row' }, [
       h('b', {}, [String(idx + 1)]),
       h('span', { class: `avatar sm color-${avatarColorFor(p.id || p.username)}` }, [p.avatar_url ? h('img', { src: p.avatar_url, alt: p.username }) : avatarLetter(p.nickname || p.username)]),
-      h('strong', {}, [p.nickname || p.username || 'Player']),
+      h('strong', {}, [`${flagEmoji(p.country_code) || ''} ${p.nickname || p.username || 'Player'}`.trim()]),
       h('em', {}, [`${fmt(p.games_won || p.score || 0)} win`]),
       h('i', {}, [`${fmt(p.gold_coins || p.coins || 0)}`]),
     ])),
@@ -386,7 +406,7 @@ function renderHistory(body, hall) {
     h('div', { class: 'rt-section-head' }, [h('div', {}, [h('h2', {}, ['Turnir tarixi']), h('p', {}, ['Oxirgi g‘oliblar va sovrinlar.'])])]),
     ...(hall || []).map((row) => h('div', { class: 'rt-history-row' }, [
       h('b', {}, [placeIcon(row.placement)]),
-      h('strong', {}, [row.nickname || row.username || 'Player']),
+      h('strong', {}, [`${flagEmoji(row.country_code) || ''} ${row.nickname || row.username || 'Player'}`.trim()]),
       h('span', {}, [row.tournament_name || 'Turnir']),
       h('em', {}, [`${fmt(row.gold_coins || 0)} GC`]),
     ])),
@@ -411,7 +431,7 @@ function renderRanking(body, players) {
 function renderBottomNav() {
   const items = [
     ['Do‘stlar', () => navigate('friends')],
-    ['Chat', () => toast('Chat o‘yin ichida ochiladi', 'info')],
+    ['Xabarlar', () => { toast('Yozma chat o‘yindan tashqarida, xabarlar bosh sahifada ochiladi', 'info'); navigate('home'); }],
     ['Bosh sahifa', () => navigate('home')],
     ['Turnir', () => {}],
     ['Profil', () => navigate('profile')],
@@ -420,7 +440,7 @@ function renderBottomNav() {
 }
 
 function navIcon(label) {
-  return label === 'Do‘stlar' ? '👥' : label === 'Chat' ? '💬' : label === 'Bosh sahifa' ? '⌂' : label === 'Profil' ? '◉' : '🏆';
+  return label === 'Do‘stlar' ? '👥' : label === 'Xabarlar' ? '✉' : label === 'Bosh sahifa' ? '⌂' : label === 'Profil' ? '◉' : '🏆';
 }
 
 function loading() {

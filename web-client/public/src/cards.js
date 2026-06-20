@@ -85,3 +85,23 @@ export function avatarColorFor(idOrName) {
 export function avatarLetter(name) {
   return (name || '?').trim().charAt(0).toUpperCase();
 }
+
+export function flagEmoji(countryCode) {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return '';
+  const base = 0x1F1E6 - 65;
+  return String.fromCodePoint(
+    base + code.charCodeAt(0),
+    base + code.charCodeAt(1),
+  );
+}
+
+export function countryName(countryCode, locale = 'uz') {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return '';
+  try {
+    return new Intl.DisplayNames([locale, 'en'], { type: 'region' }).of(code) || code;
+  } catch (_) {
+    return code;
+  }
+}

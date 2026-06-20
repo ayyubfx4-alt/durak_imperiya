@@ -1,10 +1,10 @@
-import { api } from '../api.js';
+﻿import { api } from '../api.js';
 import { h } from '../ui.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { cardSkinClass } from '../cards.js?v=160-curated-card-skins';
-import { setPref } from '../preferences.js?v=111-encoding-fix';
+import { setPref } from '../preferences.js?v=164-i18n-audio';
 
 const RARITY = {
   common: { label: 'ODDIY', color: '#4aa3ff', glow: '74,163,255' },
@@ -163,7 +163,7 @@ function renderTopHeader(data) {
     ]),
     h('section', { class: 'inv87-wallets' }, [
       wallet('💵', fmt(me.coins || 0), () => navigate('shop')),
-      wallet('🪙', fmt(data.goldCoins ?? me.gold_coins ?? 0), () => navigate('shop')),
+      wallet('GC', fmt(data.goldCoins ?? me.gold_coins ?? 0), () => navigate('shop')),
       wallet('💎', fmt(me.gems || 0), () => navigate('shop'), 'purple'),
     ]),
     h('section', { class: 'inv87-header-actions' }, [
@@ -297,13 +297,15 @@ function renderChestBox(root, data, skins, ui, rerender, chest) {
   const id = String(chest.id || 'bronze');
   const opening = ui.openingBox === id;
   const price = Number(chest.priceGold || 0);
+  const meta = chestMeta(id);
   return h('button', {
     class: `inv87-chest-box ${id} ${opening ? 'opening' : ''}`,
     disabled: !!ui.openingBox,
     onclick: () => openBox(root, id, data, skins, ui, rerender),
   }, [
-    h('span', { class: 'inv87-chest-icon' }, [chestInitial(id)]),
+    h('span', { class: 'inv87-chest-icon' }, [meta.icon]),
     h('strong', {}, [String(chest.name || `${id} quti`).toUpperCase()]),
+    h('em', { class: 'inv87-chest-desc' }, [meta.desc]),
     h('small', {}, [price > 0 ? `${fmt(price)} Gold` : 'BEPUL']),
   ]);
 }
@@ -319,7 +321,12 @@ function renderDropOverlay(ui, rerender) {
   } }, [
     h('section', { class: 'inv87-drop-modal', style: { '--rarity': rarity.color, '--rarity-rgb': rarity.glow, '--skin-bg': skin.palette?.bg || '#111827', '--skin-accent': skin.palette?.accent || rarity.color } }, [
       h('small', {}, ['TASODIFIY KARTA TUSHDI']),
-      cardArtwork(skin, true),
+      h('div', { class: `inv87-drop-copies copies-${Math.min(3, Number(skin.dropQuantity || 1))}` },
+        Array.from({ length: Math.min(3, Number(skin.dropQuantity || 1)) }, (_, i) =>
+          h('div', { class: 'inv87-drop-copy', style: { '--copy-i': i } }, [cardArtwork(skin, true)])
+        )
+      ),
+      Number(skin.dropQuantity || 1) > 1 ? h('strong', { class: 'inv87-drop-multiplier' }, [`${skin.dropQuantity}x NUSXA`]) : null,
       h('h2', {}, [skin.name.toUpperCase()]),
       h('b', { style: { color: rarity.color } }, [rarity.label]),
       h('p', {}, ["Karta kolleksiyangizga qo'shildi. Ortiqcha nusxalarni do'stlarga sovg'a qilish mumkin."]),
@@ -497,6 +504,14 @@ function chestInitial(id) {
   return 'BR';
 }
 
+function chestMeta(id) {
+  const key = String(id || 'bronze').toLowerCase();
+  if (key.includes('diamond')) return { icon: '💎', desc: 'Eng noyob karta ehtimoli yuqori' };
+  if (key.includes('gold')) return { icon: '🏆', desc: 'Rare va legendary imkoniyati kuchli' };
+  if (key.includes('silver')) return { icon: '🥈', desc: "Ko'proq yaxshi skin olish uchun" };
+  return { icon: '🎁', desc: 'Oddiy bepul boshlang‘ich quti' };
+}
+
 function artSvg(skin) {
   const accent = safeColor(skin.palette?.accent || rarityInfo(skin.rarity).color);
   const bg = safeColor(skin.palette?.bg || '#111827');
@@ -622,7 +637,7 @@ async function openBox(root, boxType, data, skins, ui, rerender) {
     state.user.selected_skin = r.selectedSkin;
     setPref('pref_card_shirt', true);
     data.goldCoins = r.goldCoins;
-    const dropped = applyDroppedSkin(skins, r.skin, r.selectedSkin);
+    const dropped = applyDroppedSkin(skins, { ...(r.skin || {}), dropQuantity: Number(r.quantity || 1) }, r.selectedSkin);
     ui.selectedSkin = dropped;
     ui.giftSkin = dropped;
     ui.quantity = clampQuantity(1, maxGiftQty(dropped));
@@ -639,10 +654,12 @@ async function openBox(root, boxType, data, skins, ui, rerender) {
 
 function applyDroppedSkin(skins, rawSkin, selectedSkin) {
   const id = rawSkin?.id || selectedSkin || 'default';
+  const addQty = Math.max(1, Number(rawSkin?.dropQuantity || rawSkin?.quantity || 1));
   skins.forEach((skin) => { skin.selected = skin.id === id; });
   const existing = skins.find((skin) => skin.id === id);
   if (existing) {
-    existing.quantity = Math.max(1, Number(existing.quantity || 0) + 1);
+    existing.quantity = Math.max(1, Number(existing.quantity || 0) + addQty);
+    existing.dropQuantity = addQty;
     existing.owned = true;
     existing.selected = true;
     return existing;
@@ -651,7 +668,8 @@ function applyDroppedSkin(skins, rawSkin, selectedSkin) {
     ...(rawSkin || {}),
     id,
     rarity: rawSkin?.rarity || 'common',
-    quantity: 1,
+    quantity: addQty,
+    dropQuantity: addQty,
     owned: true,
     selected: true,
     page: 1,
@@ -689,6 +707,8 @@ function maxForLevel(skin) {
 
 function maxGiftQty(skin) {
   if (!skin) return 0;
+  if (skin.giftable !== undefined) return Math.max(0, Number(skin.giftable || 0));
+  if (!skin.randomOnly && skin.collectionType !== 'random') return 0;
   return Math.max(0, Number(skin.quantity || 0) - 1);
 }
 

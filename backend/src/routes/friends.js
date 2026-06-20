@@ -1,19 +1,22 @@
 import { Router } from 'express';
 import { authRequired } from '../middleware/auth.js';
 import { query, withTransaction } from '../db.js';
-import { config } from '../config.js';
 import {
-  giftGold,
-  giftEmojiPack,
   giftCardSkin,
-  giftBadge,
   giftStickerPack,
   recentGiftsForUser,
 } from '../services/gifts.js';
-import { isUserOnline } from '../game/socket.js';
-import { requireFeature } from '../services/progression.js';
+import { isUserOnline, socketIdsForUser } from '../game/socket.js';
+import { getRegistry } from '../game/socketRegistry.js';
 
 export const friendsRouter = Router();
+
+const COLLECTIBLE_GIFT_ONLY_ERROR = "Faqat ortiqcha sticker pack va tasodifiy tushgan ortiqcha karta sovg'a qilinadi";
+const FRIEND_MESSAGE_LIMIT = 80;
+
+function collectibleGiftOnly(_req, res) {
+  return res.status(403).json({ error: COLLECTIBLE_GIFT_ONLY_ERROR });
+}
 
 friendsRouter.use(authRequired);
 
@@ -26,6 +29,7 @@ function mapInviteUser(row) {
     id: row.id,
     username: row.username,
     nickname: row.nickname,
+    country_code: row.country_code || null,
     avatar_url: row.avatar_url,
     rank_wins: row.rank_wins,
     status: row.status || null,
@@ -33,12 +37,56 @@ function mapInviteUser(row) {
   };
 }
 
+function dmRoomId(userId, friendId) {
+  return `dm:${[String(userId), String(friendId)].sort().join(':')}`;
+}
+
+async function ensureAcceptedFriend(userId, friendId) {
+  if (!friendId || friendId === userId) {
+    throw Object.assign(new Error('invalid friend'), { statusCode: 400 });
+  }
+  const r = await query(
+    `SELECT 1
+       FROM friends
+      WHERE user_id = $1
+        AND friend_id = $2
+        AND status = 'accepted'
+      LIMIT 1`,
+    [userId, friendId]
+  );
+  if (!r.rows[0]) {
+    throw Object.assign(new Error("Faqat do'stlaringizga xabar yuborishingiz mumkin"), { statusCode: 403 });
+  }
+}
+
+function mapFriendMessage(row, viewerId) {
+  return {
+    id: row.id,
+    roomId: row.room_id,
+    senderId: row.sender_id,
+    content: row.content,
+    type: row.type || 'text',
+    sentAt: row.sent_at,
+    mine: String(row.sender_id) === String(viewerId),
+    senderUsername: row.sender_username || null,
+    senderNickname: row.sender_nickname || null,
+  };
+}
+
+function emitFriendMessage(recipientId, payload) {
+  const { io } = getRegistry();
+  if (!io) return;
+  for (const socketId of socketIdsForUser(recipientId)) {
+    io.to(socketId).emit('friend:message', payload);
+  }
+}
+
 // Room invites are part of the table flow, so they must work even before the
 // full Friends section is unlocked by progression.
 friendsRouter.get('/room-invite/list', async (req, res, next) => {
   try {
     const r = await query(
-      `SELECT u.id, u.username, u.nickname, u.avatar_url, u.rank_wins, f.status
+      `SELECT u.id, u.username, u.nickname, u.country_code, u.avatar_url, u.rank_wins, f.status
          FROM friends f
          JOIN users u ON u.id = f.friend_id
         WHERE f.user_id = $1
@@ -59,7 +107,7 @@ friendsRouter.get('/room-invite/search', async (req, res, next) => {
     if (q.length < 2) return res.json([]);
 
     const r = await query(
-      `SELECT u.id, u.username, u.nickname, u.avatar_url, u.rank_wins, f.status
+      `SELECT u.id, u.username, u.nickname, u.country_code, u.avatar_url, u.rank_wins, f.status
          FROM users u
          LEFT JOIN friends f
            ON f.user_id = $2
@@ -82,12 +130,10 @@ friendsRouter.get('/room-invite/search', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-friendsRouter.use(requireFeature('friends'));
-
 friendsRouter.get('/list', authRequired, async (req, res, next) => {
   try {
     const r = await query(
-      `SELECT u.id, u.username, u.nickname, u.avatar_url, u.rank_wins, u.coins,
+      `SELECT u.id, u.username, u.nickname, u.country_code, u.avatar_url, u.rank_wins, u.coins,
               u.premium_until, f.status, f.created_at
          FROM friends f JOIN users u ON u.id = f.friend_id
          WHERE f.user_id = $1 ORDER BY f.created_at DESC`,
@@ -142,120 +188,15 @@ friendsRouter.post('/remove', authRequired, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-friendsRouter.post('/gift/coins', authRequired, requireFeature('gift_system'), async (req, res, next) => {
-  try {
-    const friendId = String(req.body?.friendId || '');
-    const amount = Math.max(1, Math.min(Math.floor(Number(req.body?.amount) || 0), 1_000_000));
-    if (!friendId || friendId === req.user.id) return res.status(400).json({ error: 'invalid friend' });
-    const limit = Math.max(0, Number(config.game.friendCoinGiftDailyLimit || 0));
-    const result = await withTransaction(async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`coin_gift:${req.user.id}`]);
-      const fr = await client.query(
-        "SELECT status FROM friends WHERE user_id = $1 AND friend_id = $2",
-        [req.user.id, friendId]
-      );
-      if (!fr.rows[0] || fr.rows[0].status !== 'accepted') {
-        return { status: 403, body: { error: 'not friends' } };
-      }
-      const recipient = await client.query(
-        'SELECT id FROM users WHERE id = $1 AND is_banned = FALSE AND is_bot IS NOT TRUE',
-        [friendId]
-      );
-      if (!recipient.rows[0]) return { status: 404, body: { error: 'friend not found' } };
-      if (limit > 0) {
-        const sent = await client.query(
-          `SELECT COALESCE(SUM(-amount), 0)::bigint AS sent
-             FROM transactions
-            WHERE user_id = $1
-              AND type = 'gift'
-              AND amount < 0
-              AND created_at >= date_trunc('day', now())`,
-          [req.user.id]
-        );
-        const sentToday = Number(sent.rows[0]?.sent || 0);
-        if (sentToday + amount > limit) {
-          return {
-            status: 429,
-            body: {
-              error: 'daily gift limit exceeded',
-              dailyLimit: limit,
-              sentToday,
-              remaining: Math.max(0, limit - sentToday),
-            },
-          };
-        }
-      }
+friendsRouter.post('/gift/coins', authRequired, collectibleGiftOnly);
 
-      const debit = await client.query(
-        'UPDATE users SET coins = coins - $1 WHERE id = $2 AND coins >= $1 RETURNING coins',
-        [amount, req.user.id]
-      );
-      if (!debit.rows[0]) return { status: 400, body: { error: 'insufficient coins' } };
-      const credit = await client.query(
-        'UPDATE users SET coins = coins + $1 WHERE id = $2 RETURNING coins',
-        [amount, friendId]
-      );
-      if (!credit.rows[0]) throw Object.assign(new Error('friend not found'), { status: 404 });
-      await client.query(
-        `INSERT INTO transactions (user_id, amount, type, reference_id, metadata)
-         VALUES ($1, $2, 'gift', NULL, $3), ($4, $5, 'gift', NULL, $6)`,
-        [
-          req.user.id,
-          -amount,
-          { toId: friendId, dailyLimit: limit },
-          friendId,
-          amount,
-          { fromId: req.user.id },
-        ]
-      );
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          amount,
-          dailyLimit: limit,
-          senderCoins: Number(debit.rows[0].coins),
-          recipientCoins: Number(credit.rows[0].coins),
-        },
-      };
-    });
-    res.status(result.status).json(result.body);
-  } catch (err) { next(err); }
-});
+// Money, gold, emoji, and badge gifts are closed. Only extra collectible
+// sticker packs and random card skin copies can be sent between friends.
+friendsRouter.post('/gift/gold', authRequired, collectibleGiftOnly);
 
-// TOR §12: Gold Coin / emoji / card skin / badge gifts between accepted
-// friends. Paid items charge the sender; the recipient receives them in
-// their inventory immediately.
-friendsRouter.post('/gift/gold', authRequired, requireFeature('gift_system'), async (req, res, next) => {
-  try {
-    const r = await giftGold({
-      senderId: req.user.id,
-      recipientId: String(req.body?.friendId || ''),
-      amount: req.body?.amount,
-    });
-    res.json(r);
-  } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    next(err);
-  }
-});
+friendsRouter.post('/gift/emoji', authRequired, collectibleGiftOnly);
 
-friendsRouter.post('/gift/emoji', authRequired, requireFeature('gift_system'), async (req, res, next) => {
-  try {
-    const r = await giftEmojiPack({
-      senderId: req.user.id,
-      recipientId: String(req.body?.friendId || ''),
-      packId: String(req.body?.packId || ''),
-      message: req.body?.message,
-    });
-    res.json(r);
-  } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    next(err);
-  }
-});
-
-friendsRouter.post('/gift/skin', authRequired, requireFeature('gift_system'), async (req, res, next) => {
+friendsRouter.post('/gift/skin', authRequired, async (req, res, next) => {
   try {
     const r = await giftCardSkin({
       senderId: req.user.id,
@@ -271,22 +212,9 @@ friendsRouter.post('/gift/skin', authRequired, requireFeature('gift_system'), as
   }
 });
 
-friendsRouter.post('/gift/badge', authRequired, requireFeature('gift_system'), async (req, res, next) => {
-  try {
-    const r = await giftBadge({
-      senderId: req.user.id,
-      recipientId: String(req.body?.friendId || ''),
-      badgeId: String(req.body?.badgeId || ''),
-      message: req.body?.message,
-    });
-    res.json(r);
-  } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
-    next(err);
-  }
-});
+friendsRouter.post('/gift/badge', authRequired, collectibleGiftOnly);
 
-friendsRouter.post('/gift/sticker', authRequired, requireFeature('gift_system'), async (req, res, next) => {
+friendsRouter.post('/gift/sticker', authRequired, async (req, res, next) => {
   try {
     const r = await giftStickerPack({
       senderId: req.user.id,
@@ -308,6 +236,76 @@ friendsRouter.get('/gifts/inbox', authRequired, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+friendsRouter.get('/messages/unread', authRequired, async (req, res, next) => {
+  try {
+    const r = await query(
+      `SELECT COUNT(*)::int AS unread
+         FROM messages
+        WHERE room_id LIKE 'dm:%'
+          AND meta->>'recipientId' = $1
+          AND COALESCE((meta->>'read')::boolean, FALSE) = FALSE`,
+      [req.user.id]
+    );
+    res.json({ unread: Number(r.rows[0]?.unread || 0) });
+  } catch (err) { next(err); }
+});
+
+friendsRouter.get('/messages/:friendId', authRequired, async (req, res, next) => {
+  try {
+    const friendId = String(req.params.friendId || '');
+    await ensureAcceptedFriend(req.user.id, friendId);
+    const roomId = dmRoomId(req.user.id, friendId);
+    await query(
+      `UPDATE messages
+          SET meta = COALESCE(meta, '{}'::jsonb) || '{"read":true}'::jsonb
+        WHERE room_id = $1
+          AND meta->>'recipientId' = $2`,
+      [roomId, req.user.id]
+    );
+    const limit = Math.min(FRIEND_MESSAGE_LIMIT, Math.max(1, Number(req.query.limit || FRIEND_MESSAGE_LIMIT)));
+    const r = await query(
+      `SELECT m.id, m.room_id, m.sender_id, m.content, m.type, m.sent_at,
+              u.username AS sender_username, u.nickname AS sender_nickname
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+        WHERE m.room_id = $1
+        ORDER BY m.sent_at DESC
+        LIMIT $2`,
+      [roomId, limit]
+    );
+    res.json(r.rows.reverse().map((row) => mapFriendMessage(row, req.user.id)));
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    next(err);
+  }
+});
+
+friendsRouter.post('/messages/:friendId', authRequired, async (req, res, next) => {
+  try {
+    const friendId = String(req.params.friendId || '');
+    const content = String(req.body?.content || '').trim().slice(0, 1000);
+    if (!content) return res.status(400).json({ error: 'Xabar matnini kiriting' });
+    await ensureAcceptedFriend(req.user.id, friendId);
+    const roomId = dmRoomId(req.user.id, friendId);
+    const r = await query(
+      `INSERT INTO messages (room_id, sender_id, content, type, meta)
+       VALUES ($1, $2, $3, 'text', $4)
+       RETURNING id, room_id, sender_id, content, type, sent_at`,
+      [roomId, req.user.id, content, { recipientId: friendId, read: false }]
+    );
+    const message = mapFriendMessage({
+      ...r.rows[0],
+      sender_username: req.user.username,
+      sender_nickname: req.user.nickname,
+    }, req.user.id);
+    emitFriendMessage(friendId, { ...message, mine: false, friendId: req.user.id });
+    res.json({ ok: true, message });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ error: err.message });
+    next(err);
+  }
+});
+
 friendsRouter.get('/search', authRequired, async (req, res, next) => {
   try {
     // Support ?nick=anvar (exact @nickname prefix) or legacy ?q=name (display name)
@@ -319,7 +317,7 @@ friendsRouter.get('/search', authRequired, async (req, res, next) => {
     let r;
     if (nick) {
       r = await query(
-        `SELECT id, nickname, username, avatar_url, rank_wins
+        `SELECT id, nickname, username, country_code, avatar_url, rank_wins
            FROM users
            WHERE lower(nickname) LIKE lower($1) AND id <> $2 AND is_banned = FALSE AND is_bot IS NOT TRUE
            ORDER BY rank_wins DESC LIMIT 20`,
@@ -327,7 +325,7 @@ friendsRouter.get('/search', authRequired, async (req, res, next) => {
       );
     } else {
       r = await query(
-        `SELECT id, nickname, username, avatar_url, rank_wins
+        `SELECT id, nickname, username, country_code, avatar_url, rank_wins
            FROM users
            WHERE (lower(username) LIKE lower($1) OR lower(nickname) LIKE lower($1))
              AND id <> $2 AND is_banned = FALSE AND is_bot IS NOT TRUE

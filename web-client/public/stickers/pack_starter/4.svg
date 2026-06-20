@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#fcd34d"/><stop offset="1" stop-color="#ef4444"/></linearGradient></defs>
+  <rect width="512" height="512" rx="96" fill="#09090b"/>
+  <path d="M256 102c66 74 118 126 118 190 0 70-52 118-118 118s-118-48-118-118c0-64 52-116 118-190z" fill="url(#g)"/>
+  <circle cx="256" cy="286" r="62" fill="#111827"/>
+  <text x="256" y="306" text-anchor="middle" font-family="Arial Black,Arial,sans-serif" font-size="52" fill="#ffe9a3">GO</text>
+  <text x="256" y="452" text-anchor="middle" font-family="Arial Black,Arial,sans-serif" font-size="44" fill="#fff2b6">PLAY</text>
+</svg>

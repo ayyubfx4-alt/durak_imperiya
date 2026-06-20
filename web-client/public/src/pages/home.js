@@ -1,21 +1,28 @@
-import { h } from '../ui.js';
+﻿import { h } from '../ui.js';
 import { api } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
 import { avatarColorFor, avatarLetter } from '../cards.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
 import { showRewardedAd as showNativeRewardedAd } from '../native/capacitor-bridge.js';
 import { initAI, askAI } from '../services/aiChat.js?v=46-royal-dashboard';
 import { attachGoldScrollIndicator } from '../scrollIndicator.js';
 import { hideRoyalLoader, showRoyalLoader, updateRoyalLoader } from '../royalLoading.js?v=129-royal-loader-clean';
-import { refreshLiveState } from '../realtime.js?v=140-full-audit';
+import { refreshLiveState } from '../realtime.js?v=167-smooth-live';
+import { t } from '../i18n.js';
 
 const AD_REWARD = 800;
 const AD_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const HOME_FAST_USER_MS = 320;
 const HOME_FAST_PANEL_MS = 420;
-let homePanelCache = { baraban: null, leaders: null, donors: [], at: 0 };
+let homePanelCache = { baraban: null, leaders: null, donors: [], messageUnread: 0, at: 0 };
 let homeLiveCleanups = [];
+
+function tSafe(key, fallback, vars = {}) {
+  let value = t(key);
+  if (!value || value === key) value = fallback;
+  return String(value).replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
+}
 
 function clearHomeLiveCleanups() {
   for (const cleanup of homeLiveCleanups.splice(0)) {
@@ -38,15 +45,29 @@ const BARABAN_SEGMENTS = [
 ];
 
 export function invalidateHomePanelCache() {
-  homePanelCache = { baraban: null, leaders: null, donors: [], at: 0 };
+  homePanelCache = { baraban: null, leaders: null, donors: [], messageUnread: 0, at: 0 };
 }
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function nextQuickTableSize() {
+  const sizes = [3, 2, 3, 4];
+  let index = 0;
+  try {
+    index = Number(localStorage.getItem('durak.quick.table.index') || 0);
+    localStorage.setItem('durak.quick.table.index', String(index + 1));
+  } catch (_) { /* ignore */ }
+  return sizes[Math.abs(index) % sizes.length];
+}
+
+function quickLoaderPlayers(myName, maxPlayers) {
+  return [myName, 'Elena', 'Andre', 'Marco'].slice(0, Math.max(2, Number(maxPlayers || 2)));
+}
+
 function readHomePanelResults(results, user) {
-  const [barabanResult, leadersResult, donationResult] = Array.isArray(results) ? results : [];
+  const [barabanResult, leadersResult, donationResult, messagesResult] = Array.isArray(results) ? results : [];
   const baraban = barabanResult?.status === 'fulfilled' ? barabanResult.value : homePanelCache.baraban;
   const receivedAt = Date.now();
   if (baraban && typeof baraban === 'object') baraban._clientReceivedAt = receivedAt;
@@ -56,10 +77,14 @@ function readHomePanelResults(results, user) {
   const donors = donationResult?.status === 'fulfilled' && Array.isArray(donationResult.value)
     ? donationResult.value
     : (homePanelCache.donors || []);
+  const messageUnread = messagesResult?.status === 'fulfilled'
+    ? unreadMessagesFromFriends(messagesResult.value)
+    : Number(homePanelCache.messageUnread || 0);
   return {
     baraban,
     leaders: leaders?.length ? leaders : fallbackLeaders(user),
     donors,
+    messageUnread,
     at: receivedAt,
   };
 }
@@ -67,6 +92,66 @@ function readHomePanelResults(results, user) {
 function saveHomePanelCache(results, user) {
   homePanelCache = readHomePanelResults(results, user);
   return homePanelCache;
+}
+
+function unreadMessagesFromFriends(data) {
+  return Number(data?.unread || 0);
+}
+
+function setHomeBadge(container, className, count) {
+  if (!container) return;
+  let badge = container.querySelector(`.${className}`);
+  if (count <= 0) {
+    badge?.remove();
+    return;
+  }
+  if (!badge) {
+    badge = h('b', { class: className }, []);
+    container.appendChild(badge);
+  }
+  badge.textContent = String(Math.min(Number(count || 0), 99));
+}
+
+function updateHomeMessageBadge(count = 0) {
+  const safeCount = Math.max(0, Number(count || 0));
+  setHomeBadge(document.querySelector('.royal-side-item[data-side-key="messages"]'), 'side-badge', safeCount);
+  setHomeBadge(document.querySelector('.dash-action[data-top-key="messages"]'), 'dash-action-badge', safeCount);
+}
+
+function isPremiumUser(user = {}) {
+  return Boolean(user.premium_until && new Date(user.premium_until) > new Date());
+}
+
+function displayUserName(user = {}) {
+  return user.nickname ? `@${user.nickname}` : `@${user.username || 'guest'}`;
+}
+
+function leagueLine(user = {}) {
+  return `🏆 ${isPremiumUser(user) ? 'Premium Liga' : 'Oltin Liga'}   ♞ ${Number(user.rating || 0).toLocaleString()}`;
+}
+
+function levelProgress(user = {}) {
+  return Math.min(100, Math.max(0, Number(user.level_progress ?? 0)));
+}
+
+function setLiveText(selector, value) {
+  const el = document.querySelector(selector);
+  if (!el) return;
+  const next = String(value);
+  if (el.textContent !== next) el.textContent = next;
+}
+
+export function updateHomeLiveUser(user = state.user) {
+  if (!user || !document.querySelector('.royal-dashboard-screen.home-screen')) return;
+  setLiveText('[data-live-user-name]', displayUserName(user));
+  setLiveText('[data-live-user-league]', leagueLine(user));
+  setLiveText('[data-live-user-level]', user.level ?? 0);
+  const progress = levelProgress(user);
+  const progressBar = document.querySelector('[data-live-user-progress-bar]');
+  if (progressBar) progressBar.style.width = `${progress}%`;
+  setLiveText('[data-live-user-progress]', `${progress} / 100`);
+  setLiveText('[data-live-balance-value="coins"]', Number(user.coins || 0).toLocaleString());
+  setLiveText('[data-live-balance-value="gold_coins"]', Number(user.gold_coins || 0).toLocaleString());
 }
 
 export async function renderHome(root) {
@@ -84,23 +169,29 @@ export async function renderHome(root) {
     api.request('GET', '/baraban/status'),
     api.leaderboard('season', 3),
     api.donationsUsersLeaderboard(),
+    api.friendMessagesUnread(),
   ]);
   let panelSnapshot = homePanelCache;
   if (homePanelCache.at && Date.now() - homePanelCache.at < 45000) {
-    panelPromise.then((results) => saveHomePanelCache(results, state.user || user));
+    panelPromise.then((results) => {
+      const snapshot = saveHomePanelCache(results, state.user || user);
+      updateHomeMessageBadge(snapshot.messageUnread);
+      updateHomeBarabanPanel(snapshot.baraban, state.user || user, () => renderHome(root), snapshot.at, cleanups);
+    });
   } else {
-    const hadPanelCache = !!homePanelCache.at;
     const fastPanels = await Promise.race([panelPromise, wait(HOME_FAST_PANEL_MS).then(() => null)]);
     if (fastPanels) panelSnapshot = saveHomePanelCache(fastPanels, user);
     else panelPromise.then((results) => {
-      saveHomePanelCache(results, state.user || user);
-      if (!hadPanelCache && root?.isConnected) renderHome(root);
+      const snapshot = saveHomePanelCache(results, state.user || user);
+      updateHomeMessageBadge(snapshot.messageUnread);
+      updateHomeBarabanPanel(snapshot.baraban, state.user || user, () => renderHome(root), snapshot.at, cleanups);
     });
   }
 
   const baraban = panelSnapshot.baraban;
   const leaders = panelSnapshot.leaders || fallbackLeaders(user);
   const donors = panelSnapshot.donors || [];
+  const messageUnread = Number(panelSnapshot.messageUnread || 0);
   const donationTotal = Array.isArray(donors)
     ? donors.reduce((sum, item) => sum + Number(item.total_usd_cents || item.totalUsdCents || 0), 0)
     : 0;
@@ -111,56 +202,57 @@ export async function renderHome(root) {
   screen.appendChild(h('aside', { class: 'royal-dash-side' }, [
     brandBlock(),
     sideNav([
-      ['home', '⌂', 'Bosh sahifa', () => toast('Siz bosh sahifadasiz', 'info')],
-      ['profile', '♟', 'Profil', () => go('profile')],
-      ['leaderboard', '♛', 'Reytinglar', () => go('leaderboard')],
-      ['friends', '♟', "Do'stlar", () => go('friends')],
-      ['messages', '✉', 'Xabarlar', () => toast('Xabarlar o\'yin ichida ko\'rinadi', 'info'), 3],
-      ['inventory', '♠', 'Kolleksiya', () => go('inventory')],
-      ['achievements', '★', 'Nishonlar', () => go('achievements')],
-      ['shop', '🛒', "Do'kon", () => go('shop')],
-      ['premium', '♕', 'Premium', () => go('shop', { tab: 'premium' })],
-      ['ai', '🤖', "Sun'iy intellekt", () => openHomeAI(user)],
+      ['home', '⌂', tSafe('home.nav_home', 'Bosh sahifa'), () => toast(tSafe('home.current_page', 'Siz bosh sahifadasiz'), 'info')],
+      ['lobby', '♥', tSafe('nav.tables', 'Stollar'), () => go('lobby')],
+      ['profile', '♟', tSafe('home.profile', 'Profil'), () => go('profile')],
+      ['leaderboard', '♛', tSafe('home.leaderboard', 'Reytinglar'), () => go('leaderboard')],
+      ['friends', '♟', tSafe('home.friends', "Do'stlar"), () => go('friends')],
+      ['messages', '✉', tSafe('home.messages', 'Xabarlar'), openMessages, messageUnread],
+      ['inventory', '♠', tSafe('home.inventory', 'Kolleksiya'), () => go('inventory')],
+      ['achievements', '★', tSafe('home.achievements', 'Nishonlar'), () => go('achievements')],
+      ['shop', '🛒', tSafe('home.shop', "Do'kon"), () => go('shop')],
+      ['premium', '♕', tSafe('home.premium', 'Premium'), () => go('shop', { tab: 'premium' })],
+      ['ai', '🤖', tSafe('home.ai', "Sun'iy intellekt"), () => openHomeAI(user)],
     ]),
   ]));
 
   screen.appendChild(h('main', { class: 'royal-dash-main' }, [
-    topStrip(user),
+    topStrip(user, messageUnread, openMessages),
     h('section', { class: 'royal-dash-grid' }, [
       featureCard({
         className: 'play hero',
-        title: "O'YNASH",
-        subtitle: "TEZKOR O'YIN",
+        title: tSafe('home.play', "O'YNASH"),
+        subtitle: tSafe('home.play_subtitle', "TEZKOR O'YIN"),
         art: h('div', { class: 'dash-card-art cards' }, [
           h('span', { class: 'dash-playing-card black' }, ['K♠']),
           h('span', { class: 'dash-playing-card red' }, ['Q♥']),
         ]),
-        button: "O'YINNI BOSHLASH",
+        button: tSafe('home.play_button', "O'YINNI BOSHLASH"),
         onClick: quickPlay,
       }),
       featureCard({
         className: 'tables hero',
-        title: 'STOLLAR',
-        subtitle: "O'Z STOLINGIZNI TANLANG",
-        art: h('div', { class: 'dash-card-art table' }, [h('span', {}, ['♕'])]),
-        button: 'STOL YARATISH',
-        onClick: () => go('lobby'),
+        title: tSafe('home.tables', 'STOLLAR'),
+        subtitle: tSafe('home.tables_subtitle', "O'Z STOLINGIZNI TANLANG"),
+        art: h('div', { class: 'dash-card-art table' }, [h('span', {}, ['♠'])]),
+        button: tSafe('home.create_table', 'STOL YARATISH'),
+        onClick: openTables,
       }),
       featureCard({
         className: 'tournaments hero',
-        title: 'TURNIRLAR',
-        subtitle: 'KATTA MUKOFOTLAR',
+        title: tSafe('home.tournaments', 'TURNIRLAR'),
+        subtitle: tSafe('home.tournaments_subtitle', 'KATTA MUKOFOTLAR'),
         art: h('div', { class: 'dash-card-art trophy' }, ['🏆']),
-        button: 'TURNIRGA KIRISH',
+        button: tSafe('home.tournaments_button', 'TURNIRGA KIRISH'),
         onClick: () => go('tournaments'),
       }),
-      miniCard('😎', 'KOLLEKSIYA', "EMOJI, KARTA VA NISHONLARNI YIG'ING", "KO'RISH", () => go('inventory'), 'collection'),
-      miniCard('🛍', "DO'KON", "EMOJI, KARTA, STIKER VA KO'P YANA", "DO'KONGA KIRISH", () => go('shop'), 'shop'),
-      miniCard('🛡', 'NISHONLAR', "YUTUQLARINGIZNI KO'RING", "KO'RISH", () => go('achievements'), 'badges'),
-      miniCard('🎁', 'REFERAL', "DO'STLARINGIZNI TAKLIF QILING VA BONUS OLING", 'TAKLIF QILISH', shareInvite, 'referral'),
-      miniCard('💝', 'DONAT', donationTotal > 0
-        ? `LOYIHAGA ${(donationTotal / 100).toFixed(0)}$ YORDAM YIG'ILDI`
-        : 'MAJBURIY EMAS, LOYIHA RIVOJI UCHUN YORDAM', 'YORDAM BERISH', () => go('donations'), 'donat-mini'),
+      miniCard('😎', tSafe('home.inventory', 'KOLLEKSIYA'), tSafe('home.collection_subtitle', "EMOJI, KARTA VA NISHONLARNI YIG'ING"), tSafe('home.view_button', "KO'RISH"), () => go('inventory'), 'collection'),
+      miniCard('🛍', tSafe('home.shop', "DO'KON"), tSafe('home.shop_subtitle', "EMOJI, KARTA, STIKER VA KO'P YANA"), tSafe('home.shop_button', "DO'KONGA KIRISH"), () => go('shop'), 'shop'),
+      miniCard('🛡', tSafe('home.achievements', 'NISHONLAR'), tSafe('home.achievements_subtitle', "YUTUQLARINGIZNI KO'RING"), tSafe('home.view_button', "KO'RISH"), () => go('achievements'), 'badges'),
+      miniCard('🎁', 'REFERAL', tSafe('home.invite_subtitle', "DO'STLARINGIZNI TAKLIF QILING VA BONUS OLING"), tSafe('home.invite', 'TAKLIF QILISH'), shareInvite, 'referral'),
+      miniCard('💝', tSafe('home.donations', 'DONAT'), donationTotal > 0
+        ? tSafe('home.donation_collected', `LOYIHAGA ${(donationTotal / 100).toFixed(0)}$ YORDAM YIG'ILDI`, { amount: (donationTotal / 100).toFixed(0) })
+        : tSafe('home.donation_subtitle', 'MAJBURIY EMAS, LOYIHA RIVOJI UCHUN YORDAM'), tSafe('home.donation_button', 'YORDAM BERISH'), () => go('donations'), 'donat-mini'),
     ]),
     aiBanner(user),
   ]));
@@ -168,29 +260,29 @@ export async function renderHome(root) {
   screen.appendChild(h('aside', { class: 'royal-dash-right' }, [
     promoPanel({
       className: 'gold-shop',
-      title: "GOLD COIN DO'KONI",
-      text: 'Sotib oling va imtiyozlarga ega bo\'ling',
-      icon: '🪙',
-      button: 'SOTIB OLISH',
+      title: tSafe('home.gold_shop_title', "GOLD COIN DO'KONI"),
+      text: tSafe('home.gold_shop_text', 'Sotib oling va imtiyozlarga ega bo\'ling'),
+      icon: 'GC',
+      button: tSafe('home.buy_button', 'SOTIB OLISH'),
       onClick: () => go('shop', { tab: 'gold' }),
     }),
     barabanPanel(baraban, user, () => renderHome(root), panelSnapshot.at, cleanups),
     promoPanel({
       className: 'donat old-donat-hidden',
-      title: 'DONAT',
+      title: tSafe('home.donations', 'DONAT'),
       text: donationTotal > 0
-        ? `Loyihaga ${(donationTotal / 100).toFixed(0)}$ yordam yig'ildi`
-        : 'Majburiy emas, loyiha rivoji uchun yordam',
+        ? tSafe('home.donation_collected', `Loyihaga ${(donationTotal / 100).toFixed(0)}$ yordam yig'ildi`, { amount: (donationTotal / 100).toFixed(0) })
+        : tSafe('home.donation_subtitle', 'Majburiy emas, loyiha rivoji uchun yordam'),
       icon: '💝',
-      button: 'YORDAM BERISH',
+      button: tSafe('home.donation_button', 'YORDAM BERISH'),
       onClick: () => go('donations'),
     }),
     promoPanel({
       className: 'premium',
-      title: 'PREMIUM',
-      text: "Reklamasiz o'yin va ko'proq imtiyozlar",
+      title: tSafe('home.premium', 'PREMIUM'),
+      text: tSafe('home.premium_text', "Reklamasiz o'yin va ko'proq imtiyozlar"),
       icon: '♕',
-      button: 'BATAFSIL',
+      button: tSafe('home.details_button', 'BATAFSIL'),
       onClick: () => go('shop', { tab: 'premium' }),
     }),
     leadersPanel(leaders),
@@ -209,22 +301,33 @@ export async function renderHome(root) {
     navigate(page, params);
   }
 
+  function openMessages() {
+    sfx.play('click');
+    navigate('friends', { tab: 'messages' });
+  }
+
+  function openTables() {
+    sfx.play('click');
+    navigate('lobby');
+  }
+
   async function quickPlay() {
     sfx.play('click');
     const myName = user.nickname || user.username || (user.email ? String(user.email).split('@')[0] : '') || 'SIZ';
+    const maxPlayers = nextQuickTableSize();
+    const loaderPlayers = quickLoaderPlayers(myName, maxPlayers);
     showRoyalLoader({
       source: 'duel',
       variant: 'duel',
-      title: '1 VS 1',
-      subtitle: 'Duel battle loading',
+      title: maxPlayers === 2 ? '1 VS 1' : `${maxPlayers} O'YINCHI`,
+      subtitle: 'Quick battle loading',
       status: 'Voice, chat va gold progress tayyorlanmoqda',
       progress: 28,
       items: ['VOICE', 'CHAT', 'GOLD'],
-      players: [myName, 'RAQIB'],
+      players: loaderPlayers,
     });
     try {
-      const { emitWithAck, connectSocket } = await import('../socket.js');
-      const socket = connectSocket();
+      const { emitWithAck } = await import('../socket.js');
       const liveCoins = Number((state.user || user).coins || 0);
       if (liveCoins < 100) {
         hideRoyalLoader('duel');
@@ -234,7 +337,7 @@ export async function renderHome(root) {
       toast("O'yin ochilmoqda...", 'info');
       updateRoyalLoader({ source: 'duel', progress: 48, status: 'Stavka, xona va battle sozlanmoqda' });
       const created = await emitWithAck('room:create', {
-        maxPlayers: 2,
+        maxPlayers,
         stake: 100,
         deckSize: 36,
         turnSeconds: 30,
@@ -250,27 +353,9 @@ export async function renderHome(root) {
         return toast(created?.error || "O'yin ochilmadi", 'error');
       }
 
-      let moved = false;
-      updateRoyalLoader({ source: 'duel', progress: 74, status: 'Kartalar aralashtirilmoqda' });
-      socket.once('game:start', (gameView) => {
-        moved = true;
-        state.game = gameView;
-        const opponent = gameView?.players?.find((p) => p.id !== (state.user || user)?.id);
-        updateRoyalLoader({
-          source: 'duel',
-          progress: 92,
-          status: 'Duel boshlanmoqda',
-          players: [myName, opponent?.nickname || opponent?.username || 'RAQIB'],
-        });
-        navigate('game', { code: created.code });
-      });
-      const started = await emitWithAck('room:start', { code: created.code }, 5000)
-        .catch((e) => ({ ok: false, error: e.message }));
-      if (!started?.ok) {
-        hideRoyalLoader('duel');
-        return toast(started?.error || "O'yin boshlanmadi", 'error');
-      }
-      setTimeout(() => { if (!moved) navigate('game', { code: created.code }); }, 250);
+      updateRoyalLoader({ source: 'duel', progress: 88, status: 'Stol ochilmoqda' });
+      hideRoyalLoader('duel');
+      navigate('game', { code: created.code });
     } catch (e) {
       hideRoyalLoader('duel');
       toast(e.message || 'Xatolik', 'error');
@@ -295,55 +380,57 @@ function brandBlock() {
 
 function sideNav(items) {
   return h('nav', { class: 'royal-side-nav' }, items.map(([key, icon, label, onClick, badge]) =>
-    h('button', { class: `royal-side-item ${key === 'home' ? 'active' : ''}`, onclick: onClick }, [
+    h('button', { class: `royal-side-item ${key === 'home' ? 'active' : ''}`, 'data-side-key': key, onclick: onClick }, [
       h('span', { class: 'side-icon' }, [icon]),
       h('span', { class: 'side-label' }, [label]),
-      badge ? h('b', { class: 'side-badge' }, [String(badge)]) : null,
+      Number(badge || 0) > 0 ? h('b', { class: 'side-badge' }, [String(Math.min(Number(badge || 0), 99))]) : null,
     ].filter(Boolean))
   ));
 }
 
-function topStrip(user) {
-  const premium = user.premium_until && new Date(user.premium_until) > new Date();
+function topStrip(user, messageUnread = 0, openMessages = () => {}) {
   return h('header', { class: 'royal-dash-top' }, [
-    h('button', { class: 'dash-profile', onclick: () => navigate('profile') }, [
+    h('button', { class: 'dash-profile', 'data-live-profile': '1', onclick: () => navigate('profile') }, [
       h('div', { class: `avatar xl color-${avatarColorFor(user.id || user.username)} ${user.selected_avatar_frame ? `profile-frame frame-${user.selected_avatar_frame}` : ''}` }, [
         user.avatar_url ? h('img', { src: user.avatar_url, alt: user.username || 'avatar' }) : avatarLetter(user.username || user.nickname),
       ]),
       h('div', { class: 'dash-profile-meta' }, [
-        h('strong', {}, [user.nickname ? `@${user.nickname}` : `@${user.username || 'guest'}`]),
-        h('span', {}, [`🏆 ${premium ? 'Premium Liga' : 'Oltin Liga'}   ♞ ${Number(user.rating || 0).toLocaleString()}`]),
+        h('strong', { 'data-live-user-name': '1' }, [displayUserName(user)]),
+        h('span', { 'data-live-user-league': '1' }, [leagueLine(user)]),
         h('div', { class: 'dash-level-row' }, [
-          h('b', {}, [String(user.level ?? 0)]),
-          h('i', {}, [h('em', { style: `width:${Math.min(100, Number(user.level_progress ?? 0))}%` })]),
-          h('small', {}, [`${Number(user.level_progress ?? 0)} / 100`]),
+          h('b', { 'data-live-user-level': '1' }, [String(user.level ?? 0)]),
+          h('i', {}, [h('em', { 'data-live-user-progress-bar': '1', style: `width:${levelProgress(user)}%` })]),
+          h('small', { 'data-live-user-progress': '1' }, [`${levelProgress(user)} / 100`]),
         ]),
       ]),
     ]),
-    balanceCard('💵', Number(user.coins || 0), 'DURAK DOLLARI', () => navigate('shop', { tab: 'dollar' })),
-    balanceCard('🪙', Number(user.gold_coins || 0), 'GOLD COIN', () => navigate('shop', { tab: 'gold' })),
+    balanceCard('💵', Number(user.coins || 0), 'DURAK DOLLARI', () => navigate('shop', { tab: 'dollar' }), 'coins'),
+    balanceCard('GC', Number(user.gold_coins || 0), 'GOLD COIN', () => navigate('shop', { tab: 'gold' }), 'gold_coins'),
     h('div', { class: 'dash-top-actions' }, [
       topAction('🎁', "Do'stlar", () => navigate('friends')),
-      topAction('✉', 'Xabarlar', () => toast('Yangi xabarlar o\'yin ichida ko\'rinadi', 'info'), 3),
+      topAction('✉', 'Xabarlar', openMessages, messageUnread, 'messages'),
       topAction('⚙', 'Sozlamalar', () => navigate('settings')),
     ]),
   ]);
 }
 
-function balanceCard(icon, value, label, onClick) {
-  return h('button', { class: 'dash-balance', onclick: onClick }, [
-    h('span', {}, [icon]),
-    h('strong', {}, [value.toLocaleString()]),
+function balanceCard(icon, value, label, onClick, liveKey = '') {
+  const liveAttrs = liveKey ? { 'data-live-balance': liveKey } : {};
+  const valueAttrs = liveKey ? { 'data-live-balance-value': liveKey } : {};
+  const iconClass = icon === 'GC' ? 'coin-symbol' : '';
+  return h('button', { class: 'dash-balance', onclick: onClick, ...liveAttrs }, [
+    h('span', { class: iconClass }, [icon]),
+    h('strong', valueAttrs, [value.toLocaleString()]),
     h('small', {}, [label]),
     h('b', {}, ['+']),
   ]);
 }
 
-function topAction(icon, label, onClick, badge) {
-  return h('button', { class: 'dash-action', onclick: onClick }, [
+function topAction(icon, label, onClick, badge, key = '') {
+  return h('button', { class: 'dash-action', 'data-top-key': key || undefined, onclick: onClick }, [
     h('span', {}, [icon]),
     h('small', {}, [label]),
-    badge ? h('b', {}, [String(badge)]) : null,
+    Number(badge || 0) > 0 ? h('b', { class: 'dash-action-badge' }, [String(Math.min(Number(badge || 0), 99))]) : null,
   ].filter(Boolean));
 }
 
@@ -356,6 +443,13 @@ function featureCard({ className, title, subtitle, art, button, onClick }) {
   ]);
 }
 
+function formatStake(n) {
+  const value = Number(n || 0);
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1000) return `${Math.round(value / 100) / 10}K`;
+  return String(value);
+}
+
 function miniCard(icon, title, text, button, onClick, className) {
   return h('article', { class: `dash-mini-card ${className}` }, [
     h('div', { class: 'mini-icon' }, [icon]),
@@ -366,14 +460,21 @@ function miniCard(icon, title, text, button, onClick, className) {
 }
 
 function promoPanel({ className, title, text, icon, button, onClick }) {
+  const iconClass = icon === 'GC' ? 'promo-icon coin-symbol' : 'promo-icon';
   return h('section', { class: `dash-promo ${className}` }, [
     h('div', {}, [
       h('h3', {}, [title]),
       h('p', {}, [text]),
       h('button', { class: 'dash-gold-btn small', onclick: onClick }, [button]),
     ]),
-    h('span', { class: 'promo-icon' }, [icon]),
+    h('span', { class: iconClass }, [icon]),
   ]);
+}
+
+function updateHomeBarabanPanel(status, user, refresh, panelAt, cleanups = []) {
+  const current = document.querySelector('.royal-dashboard-screen.home-screen .dash-promo.baraban');
+  if (!current || !current.isConnected || !status) return;
+  current.replaceWith(barabanPanel(status, user, refresh, panelAt, cleanups));
 }
 
 function barabanPanel(status, user, refresh, panelAt = Date.now(), cleanups = []) {
@@ -396,7 +497,6 @@ function barabanPanel(status, user, refresh, panelAt = Date.now(), cleanups = []
   const receivedAt = Number(status?._clientReceivedAt || panelAt || Date.now());
   let liveCanSpin = canSpin;
   let lastTimerText = timer;
-  let expiryRefreshRequested = false;
   const timerValue = h('span', { class: 'baraban-time-value' }, ['']);
   const buttonEl = h('button', {
     class: `dash-gold-btn small ${canSpin ? '' : 'disabled'}`,
@@ -418,11 +518,6 @@ function barabanPanel(status, user, refresh, panelAt = Date.now(), cleanups = []
           : formatDuration(left);
     timerValue.textContent = lastTimerText;
     buttonEl.classList.toggle('disabled', !liveCanSpin);
-    if (liveCanSpin && !canSpin && !expiryRefreshRequested) {
-      expiryRefreshRequested = true;
-      invalidateHomePanelCache();
-      setTimeout(() => refresh?.(), 250);
-    }
   };
   updateCountdown();
   if (!locked && !canSpin && !waitingForStatus && nextMs > 0) {
@@ -444,22 +539,33 @@ function barabanPanel(status, user, refresh, panelAt = Date.now(), cleanups = []
 async function spinBaraban(refresh) {
   sfx.play('click');
   const wheel = openBarabanWheel();
-  try {
-    wheel.setStatus('Server natijani tekshiryapti...');
-    const result = await api.request('POST', '/baraban/spin');
-    wheel.setStatus('Baraban aylanmoqda...');
-    await wheel.spinTo(pickPrizeSegmentIndex(result));
-    applyBarabanBalances(result);
-    sfx.play(result?.prize_type === 'empty' ? 'click' : 'coin');
-    wheel.showResult(result, () => {
-      wheel.close();
-      invalidateHomePanelCache();
-      refresh?.();
-    });
-    refreshLiveState('baraban-spin', { force: true }).catch(() => {});
-  } catch (e) {
-    wheel.showError(e.message || 'Baraban ishlamadi');
-  }
+  wheel.waitForUserSpin(async () => {
+    try {
+      wheel.setStatus('Server natijani tekshiryapti...');
+      wheel.startPendingSpin();
+      const result = await api.request('POST', '/baraban/spin');
+      wheel.setStatus("Natija tasdiqlandi, baraban to'xtamoqda...");
+      await wheel.finishSpinTo(pickPrizeSegmentIndex(result));
+      applyBarabanBalances(result);
+      updateHomeLiveUser(state.user);
+      sfx.play(result?.prize_type === 'empty' ? 'click' : 'coin');
+      wheel.showResult(result, () => {
+        wheel.close();
+        invalidateHomePanelCache();
+        refresh?.();
+      });
+      refreshLiveState('baraban-spin', { force: true })
+        .then((live) => {
+          if (live?.user) {
+            state.user = { ...(state.user || {}), ...live.user };
+            updateHomeLiveUser(state.user);
+          }
+        })
+        .catch(() => {});
+    } catch (e) {
+      wheel.showError(e.message || 'Baraban ishlamadi');
+    }
+  });
 }
 
 function barabanWheelBackground() {
@@ -484,6 +590,11 @@ function pickPrizeSegmentIndex(result) {
 function openBarabanWheel() {
   document.querySelector('.baraban-wheel-bg')?.remove();
   const slice = 360 / BARABAN_SEGMENTS.length;
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  let rafId = 0;
+  let currentRotation = 0;
+  let lastFrameAt = 0;
+  let pendingSpinActive = false;
   const wheel = h('div', {
     class: 'baraban-wheel',
     style: { background: barabanWheelBackground() },
@@ -523,27 +634,94 @@ function openBarabanWheel() {
   ]);
   document.body.appendChild(bg);
 
+  wheel.style.transition = 'none';
+  wheel.style.willChange = 'transform';
+
+  function setRotation(deg) {
+    currentRotation = deg;
+    wheel.style.transform = `rotate(${currentRotation}deg)`;
+  }
+
+  function stopAnimation() {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    pendingSpinActive = false;
+  }
+
+  function animateTo(targetRotation, duration) {
+    stopAnimation();
+    const from = currentRotation;
+    const delta = targetRotation - from;
+    const startedAt = Date.now();
+    return new Promise((resolve) => {
+      const tick = () => {
+        const progress = Math.min(1, (Date.now() - startedAt) / duration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        setRotation(from + delta * eased);
+        if (progress < 1) {
+          rafId = requestAnimationFrame(tick);
+          return;
+        }
+        wheel.classList.remove('is-spinning');
+        rafId = 0;
+        resolve();
+      };
+      rafId = requestAnimationFrame(tick);
+    });
+  }
+
   return {
-    close: () => bg.remove(),
+    close: () => {
+      stopAnimation();
+      bg.remove();
+    },
     setStatus(text) {
       status.textContent = text;
     },
-    spinTo(index) {
-      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      const duration = reduce ? 900 : 4700;
+    waitForUserSpin(onSpin) {
+      let clicked = false;
+      wheel.classList.add('baraban-idle');
+      status.textContent = 'Tayyor. Aylantirish tugmasini bosing';
+      action.disabled = false;
+      action.textContent = '🎡 AYLANTIRISH';
+      action.className = 'dash-gold-btn small spin-ready-btn';
+      action.onclick = async () => {
+        if (clicked) return;
+        clicked = true;
+        action.disabled = true;
+        action.textContent = 'Aylanmoqda...';
+        wheel.classList.remove('baraban-idle');
+        await onSpin();
+      };
+    },
+    startPendingSpin() {
+      if (pendingSpinActive) return;
+      pendingSpinActive = true;
+      wheel.classList.remove('baraban-idle');
+      wheel.classList.add('is-spinning');
+      lastFrameAt = Date.now();
+      const tick = () => {
+        if (!pendingSpinActive) return;
+        const now = Date.now();
+        const dt = Math.min(34, Math.max(8, now - lastFrameAt));
+        lastFrameAt = now;
+        setRotation(currentRotation + dt * (reduce ? 0.16 : 0.34));
+        rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    },
+    finishSpinTo(index) {
+      const duration = reduce ? 900 : 2300;
       const center = index * slice + slice / 2;
-      const rotation = (reduce ? 360 : 360 * 7) - center;
-      wheel.style.transitionDuration = `${duration}ms`;
-      requestAnimationFrame(() => {
-        wheel.classList.add('is-spinning');
-        wheel.style.transform = `rotate(${rotation}deg)`;
-      });
-      return new Promise((resolve) => setTimeout(() => {
-        wheel.classList.remove('is-spinning');
-        resolve();
-      }, duration + 120));
+      const desiredMod = ((360 - center) % 360 + 360) % 360;
+      const currentMod = ((currentRotation % 360) + 360) % 360;
+      const deltaToPrize = (desiredMod - currentMod + 360) % 360;
+      const targetRotation = currentRotation + deltaToPrize + 360 * (reduce ? 1 : 3);
+      wheel.classList.add('is-spinning');
+      return animateTo(targetRotation, duration);
     },
     showResult(result, onClose) {
+      wheel.style.willChange = 'auto';
       const lines = prizeDetailLines(result);
       resultBox.innerHTML = '';
       resultBox.classList.remove('error');
@@ -557,15 +735,20 @@ function openBarabanWheel() {
           ? 'Bonus aylantirish huquqi yozildi'
         : 'Mukofot backendda tasdiqlandi va hisobingizga yozildi';
       action.disabled = false;
+      action.className = 'dash-gold-btn small';
       action.textContent = 'Yopish';
       action.onclick = onClose;
     },
     showError(message) {
+      stopAnimation();
+      wheel.style.willChange = 'auto';
+      wheel.classList.remove('baraban-idle');
       resultBox.innerHTML = '';
       resultBox.classList.add('error');
       resultBox.appendChild(h('strong', {}, [message]));
       status.textContent = 'Baraban to‘xtadi';
       action.disabled = false;
+      action.className = 'dash-gold-btn small';
       action.textContent = 'Yopish';
       action.onclick = () => bg.remove();
       toast(message, 'error');
@@ -587,6 +770,7 @@ function applyBarabanBalances(result) {
   if (balances.rank_pluses !== undefined) state.user.rank_pluses = Number(balances.rank_pluses || 0);
   if (balances.rank_progress !== undefined) state.user.rank_progress = Number(balances.rank_progress || 0);
   if (balances.baraban_extra_spins !== undefined) state.user.baraban_extra_spins = Number(balances.baraban_extra_spins || 0);
+  updateHomeLiveUser(state.user);
 }
 
 function prizeDetailLines(result) {
@@ -697,6 +881,7 @@ function prizeLabel(result) {
 
 async function shareInvite() {
   sfx.play('click');
+  let fallbackUrl = `${location.origin}/?ref=PLAY`;
   try {
     let me = state.user;
     if (!me?.referral_code) {
@@ -704,16 +889,44 @@ async function shareInvite() {
     }
     const refCode = me?.referral_code || me?.nickname || me?.username || (me?.id ? me.id.replace(/-/g, '').slice(0, 10) : 'PLAY');
     const url = `${location.origin}/?ref=${encodeURIComponent(refCode)}`;
+    fallbackUrl = url;
     const text = `Durak Imperia - premium karta o'yini. Mening havolam: ${url}`;
     if (navigator.share) {
-      await navigator.share({ title: 'Durak Imperia', text, url });
-      toast('Havola yuborildi', 'success');
+      try {
+        await navigator.share({ title: 'Durak Imperia', text, url });
+        toast('Havola yuborildi', 'success');
+        return;
+      } catch (e) {
+        if (e?.name === 'AbortError') return;
+      }
+    }
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(url);
+      toast('Havola nusxalandi', 'success');
       return;
     }
-    await navigator.clipboard?.writeText(url);
-    toast('Havola nusxalandi', 'success');
+    const area = document.createElement('textarea');
+    area.value = url;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.top = '-1000px';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    const copied = document.execCommand?.('copy');
+    area.remove();
+    if (copied) {
+      toast('Havola nusxalandi', 'success');
+      return;
+    }
+    window.prompt('Havolani nusxalang:', url);
+    toast('Havola tayyor', 'info');
   } catch (e) {
-    if (e?.name !== 'AbortError') toast(e.message || 'Havola yuborilmadi', 'error');
+    if (e?.name === 'AbortError') return;
+    window.prompt('Havolani nusxalang:', fallbackUrl);
+    toast(e.message || 'Havola yuborilmadi', 'error');
   }
 }
 
@@ -726,9 +939,25 @@ async function claimRewardedAd(refresh) {
     toast(`Keyingi reklama: ${formatDuration(left)}`, 'info');
     return;
   }
-  const rewarded = await showNativeRewardedAd();
+  const rewarded = await showNativeRewardedAd({ userId: user.id });
   if (!rewarded?.completed) {
-    toast('Reklama yakunlanmadi', 'error');
+    toast(rewarded?.error || 'Reklama yakunlanmadi', 'error');
+    return;
+  }
+  if (rewarded.ssvPending) {
+    localStorage.setItem(key, String(Date.now()));
+    toast('Reklama tasdiqlanmoqda. Mukofot serverdan hisobga yoziladi.', 'success');
+    setTimeout(() => {
+      refreshLiveState('admob-ssv', { force: true })
+        .then((live) => {
+          if (live?.user) {
+            state.user = { ...(state.user || {}), ...live.user };
+            updateHomeLiveUser(state.user);
+          }
+          refresh?.();
+        })
+        .catch(() => refresh?.());
+    }, 2500);
     return;
   }
   try {

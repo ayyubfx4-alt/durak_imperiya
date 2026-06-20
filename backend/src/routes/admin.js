@@ -283,6 +283,13 @@ adminRouter.post('/login', async (req, res, next) => {
 
 adminRouter.use(authRequired, adminRequired);
 
+adminRouter.use((req, _res, next) => {
+  req.adminAudit = (action, targetId, metadata = null) => audit(req, action, targetId, metadata);
+  next();
+});
+
+adminRouter.use(enforceAdminRoutePermission);
+
 adminRouter.get('/progression/thresholds', async (_req, res, next) => {
   try {
     res.json(await getThresholdRows({ includeDisabled: true }));
@@ -386,13 +393,6 @@ async function audit(req, action, targetId, metadata = null) {
     [req.user.id, action, target, meta]
   );
 }
-
-adminRouter.use((req, _res, next) => {
-  req.adminAudit = (action, targetId, metadata = null) => audit(req, action, targetId, metadata);
-  next();
-});
-
-adminRouter.use(enforceAdminRoutePermission);
 
 adminRouter.post('/assets/upload', async (req, res, next) => {
   try {
@@ -1128,22 +1128,39 @@ adminRouter.get('/users/:id', async (req, res, next) => {
 
 adminRouter.put('/users/:id', async (req, res, next) => {
   try {
+    const body = req.body || {};
     const username = cleanText(req.body?.username, 32);
     const email = cleanText(req.body?.email, 255) || null;
-    const isAdmin = !!req.body?.isAdmin || !!req.body?.is_admin;
+    const wantsAdminChange = Object.prototype.hasOwnProperty.call(body, 'isAdmin')
+      || Object.prototype.hasOwnProperty.call(body, 'is_admin');
+    if (wantsAdminChange && !hasAdminPermission(req.user, ['roles.manage'])) {
+      return res.status(403).json({ error: 'permission denied', required: ['roles.manage'] });
+    }
+    const isAdmin = wantsAdminChange ? (!!body.isAdmin || !!body.is_admin) : null;
     if (!username) return res.status(400).json({ error: 'username required' });
     const r = await query(
       `UPDATE users
           SET username = $2,
               nickname = COALESCE(nickname, $2),
               email = $3,
-              is_admin = $4
+              is_admin = COALESCE($4::boolean, is_admin),
+              admin_role = CASE
+                WHEN $4::boolean IS NULL THEN admin_role
+                WHEN $4::boolean = FALSE THEN 'player'
+                WHEN admin_role = 'player' THEN 'super_admin'
+                ELSE admin_role
+              END
         WHERE id = $1
-        RETURNING id, username, email, is_admin, is_banned, coins, gold_coins, updated_at`,
+        RETURNING id, username, email, is_admin, admin_role, is_banned, coins, gold_coins, updated_at`,
       [req.params.id, username, email, isAdmin]
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'user not found' });
-    await audit(req, 'user_update', req.params.id, { username, email, isAdmin });
+    await audit(req, 'user_update', req.params.id, {
+      username,
+      email,
+      adminFlagChanged: wantsAdminChange,
+      isAdmin,
+    });
     res.json(r.rows[0]);
   } catch (err) { next(err); }
 });
@@ -2138,6 +2155,137 @@ adminRouter.get('/analytics/overview', async (_req, res, next) => {
     });
   } catch (err) { next(err); }
 });
+
+// Davlatlar bo'yicha foydalanuvchi statistikasi (GeoIP).
+// country_code NULL bo'lgan yozuvlar "Noma'lum" sifatida ko'rsatiladi.
+adminRouter.get('/analytics/geo', async (_req, res, next) => {
+  try {
+    const r = await query(
+      `SELECT
+         COALESCE(country_code, 'XX') AS country_code,
+         COUNT(*)::int AS users,
+         COUNT(*) FILTER (WHERE updated_at >= now() - interval '1 day')::int AS active_24h,
+         COUNT(*) FILTER (WHERE premium_until > now())::int AS premium_users,
+         COALESCE(SUM(total_donated_cents), 0)::bigint AS donated_cents
+       FROM users
+       WHERE is_admin IS NOT TRUE AND is_bot IS NOT TRUE
+       GROUP BY COALESCE(country_code, 'XX')
+       ORDER BY users DESC
+       LIMIT 25`
+    );
+    const total = r.rows.reduce((sum, row) => sum + Number(row.users), 0);
+    const result = r.rows.map((row) => ({
+      country_code: row.country_code,
+      users: Number(row.users),
+      active_24h: Number(row.active_24h || 0),
+      premium_users: Number(row.premium_users || 0),
+      donated_cents: Number(row.donated_cents || 0),
+      percent: total > 0 ? Math.round((Number(row.users) / total) * 1000) / 10 : 0,
+    }));
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+adminRouter.get('/analytics/customer-activity', async (req, res, next) => {
+  try {
+    const limit = intParam(req.query.limit, 50, 10, 200);
+    const userSelect = `u.id AS user_id, u.username, u.nickname, u.email, COALESCE(u.country_code, 'XX') AS country_code`;
+    const [summary, donations, premium, stickers, otherPurchases] = await Promise.all([
+      query(
+        `SELECT
+           (SELECT COUNT(DISTINCT user_id)::int FROM donations WHERE is_fake IS NOT TRUE AND user_id IS NOT NULL) AS donor_users,
+           (SELECT COALESCE(SUM(amount_usd_cents),0)::bigint FROM donations WHERE is_fake IS NOT TRUE) AS donation_cents,
+           (SELECT COUNT(DISTINCT user_id)::int FROM transactions WHERE type IN ('premium','iap_premium')) AS premium_buyers,
+           (SELECT COUNT(*)::int FROM gold_transactions WHERE type = 'sticker_pack_buy' OR metadata->>'itemType' = 'sticker_pack') AS sticker_purchases,
+           (SELECT COUNT(*)::int
+              FROM (
+                SELECT id
+                  FROM gold_transactions
+                 WHERE (
+                       type IN ('purchase','iap','stripe_iap')
+                    OR metadata ? 'itemType'
+                    OR metadata ? 'productId'
+                 )
+                   AND type <> 'sticker_pack_buy'
+                   AND COALESCE(metadata->>'itemType', '') <> 'sticker_pack'
+                UNION ALL
+                SELECT id
+                  FROM transactions
+                 WHERE type IN ('iap','purchase','gold_convert','shop_buy')
+              ) other_purchase_events) AS other_purchase_events`
+      ),
+      query(
+        `SELECT d.id, d.user_id, u.username, u.nickname, u.email, COALESCE(u.country_code, 'XX') AS country_code,
+                d.display_name, d.amount_usd_cents, d.message, d.payment_ref, d.created_at
+           FROM donations d
+           LEFT JOIN users u ON u.id = d.user_id
+          WHERE d.is_fake IS NOT TRUE
+          ORDER BY d.created_at DESC
+          LIMIT $1`,
+        [limit]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT t.id, ${userSelect}, t.type, t.amount, t.metadata, t.created_at,
+                COALESCE(t.metadata->>'tierId', t.metadata->>'productId') AS item_id,
+                COALESCE(t.metadata->>'days', '') AS days
+           FROM transactions t
+           LEFT JOIN users u ON u.id = t.user_id
+          WHERE t.type IN ('premium','iap_premium')
+             OR t.metadata->>'productId' LIKE 'premium_%'
+          ORDER BY t.created_at DESC
+          LIMIT $1`,
+        [limit]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT g.id, ${userSelect}, g.type, g.amount, g.metadata, g.created_at,
+                COALESCE(g.metadata->>'packId', g.metadata->>'itemId') AS item_id
+           FROM gold_transactions g
+           LEFT JOIN users u ON u.id = g.user_id
+          WHERE g.type = 'sticker_pack_buy'
+             OR g.metadata->>'itemType' = 'sticker_pack'
+          ORDER BY g.created_at DESC
+          LIMIT $1`,
+        [limit]
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT *
+           FROM (
+             SELECT g.id, ${userSelect}, 'gold' AS currency, g.type, g.amount, g.metadata, g.created_at,
+                    COALESCE(g.metadata->>'itemType', g.metadata->>'productId', g.type) AS item_type,
+                    COALESCE(g.metadata->>'itemId', g.metadata->>'bundleId', g.metadata->>'productId') AS item_id
+               FROM gold_transactions g
+               LEFT JOIN users u ON u.id = g.user_id
+              WHERE (
+                    g.type IN ('purchase','iap','stripe_iap')
+                 OR g.metadata ? 'itemType'
+                 OR g.metadata ? 'productId'
+              )
+                AND COALESCE(g.metadata->>'itemType', '') <> 'sticker_pack'
+                AND g.type <> 'sticker_pack_buy'
+             UNION ALL
+             SELECT t.id, ${userSelect}, 'dollar' AS currency, t.type, t.amount, t.metadata, t.created_at,
+                    COALESCE(t.metadata->>'type', t.metadata->>'productId', t.type) AS item_type,
+                    COALESCE(t.metadata->>'bundleId', t.metadata->>'productId', t.metadata->>'tierId') AS item_id
+               FROM transactions t
+               LEFT JOIN users u ON u.id = t.user_id
+              WHERE t.type IN ('iap','purchase','gold_convert','shop_buy')
+                AND t.type NOT IN ('premium','iap_premium')
+           ) purchases
+          ORDER BY created_at DESC
+          LIMIT $1`,
+        [limit]
+      ).catch(() => ({ rows: [] })),
+    ]);
+    res.json({
+      summary: summary.rows[0] || {},
+      donations: donations.rows,
+      premium: premium.rows,
+      stickers: stickers.rows,
+      otherPurchases: otherPurchases.rows,
+    });
+  } catch (err) { next(err); }
+});
+
 
 adminRouter.get('/security/overview', async (_req, res, next) => {
   try {

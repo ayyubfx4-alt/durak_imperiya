@@ -18,15 +18,59 @@ export const native = {
   platform: () => (isCapacitor ? window.Capacitor.getPlatform() : 'web'),
 };
 
+const REWARD_AD_EVENTS = {
+  Loaded: 'onRewardedVideoAdLoaded',
+  FailedToLoad: 'onRewardedVideoAdFailedToLoad',
+  Showed: 'onRewardedVideoAdShowed',
+  FailedToShow: 'onRewardedVideoAdFailedToShow',
+  Dismissed: 'onRewardedVideoAdDismissed',
+  Rewarded: 'onRewardedVideoAdReward',
+};
+
+function cleanString(value) {
+  return String(value || '').trim();
+}
+
+function rewardedAdUnitId() {
+  const platform = native.platform();
+  if (platform === 'ios') {
+    return cleanString(window.__ADMOB_REWARDED_IOS_ID__ || window.__ADMOB_REWARDED_ID__);
+  }
+  return cleanString(window.__ADMOB_REWARDED_ANDROID_ID__ || window.__ADMOB_REWARDED_ID__);
+}
+
+function buildRewardSsv(userId) {
+  const safeUserId = cleanString(userId);
+  if (!safeUserId) return null;
+  return {
+    userId: safeUserId,
+    customData: JSON.stringify({ userId: safeUserId, source: 'durak-imperia' }),
+  };
+}
+
+async function loadAdMobPlugin() {
+  const bridged = window.Capacitor?.Plugins?.AdMob;
+  if (bridged) return { AdMob: bridged, RewardAdPluginEvents: REWARD_AD_EVENTS };
+
+  try {
+    const mod = await import('@capacitor-community/admob');
+    return {
+      AdMob: mod.AdMob,
+      RewardAdPluginEvents: mod.RewardAdPluginEvents || REWARD_AD_EVENTS,
+    };
+  } catch (e) {
+    throw new Error('AdMob native plugin is not available in this build');
+  }
+}
+
 // ── AdMob rewarded video ────────────────────────────────────────────────
-// Returns a promise that resolves with { reward, completed } when the
-// user closes the video. On web, immediately resolves a synthetic reward
-// (the backend will reject the bonus claim if it's not the native path).
+// Rewards are credited only after Google's signed SSV callback reaches
+// /api/admob/ssv. Browser fallback never grants coins in production.
 let admobReady = false;
 async function ensureAdMob() {
   if (admobReady || !isCapacitor) return admobReady;
   try {
-    const { AdMob } = await import('@capacitor-community/admob');
+    const { AdMob } = await loadAdMobPlugin();
     await AdMob.initialize({
       requestTrackingAuthorization: true,
       testingDevices: [],
@@ -39,33 +83,70 @@ async function ensureAdMob() {
   return admobReady;
 }
 
-export async function showRewardedAd() {
+export async function showRewardedAd(options = {}) {
+  const userId = typeof options === 'string' ? options : options?.userId;
   if (!isCapacitor) {
     // Web fallback — the server only credits when the request originates
     // from a verified native callback, so this is harmless for production.
-    await new Promise((r) => setTimeout(r, 1500));
-    return { reward: { type: 'coins', amount: 800 }, completed: true, source: 'web-stub' };
+    return {
+      reward: null,
+      completed: false,
+      source: 'web',
+      error: 'Rewarded ads are available in the Android/iOS app only',
+    };
   }
   await ensureAdMob();
   try {
-    const { AdMob, RewardAdPluginEvents } = await import('@capacitor-community/admob');
-    const adId = window.__ADMOB_REWARDED_ID__ || '';
+    const { AdMob, RewardAdPluginEvents } = await loadAdMobPlugin();
+    const adId = rewardedAdUnitId();
     if (!adId) throw new Error('Rewarded AdMob unit id is not configured');
-    await AdMob.prepareRewardVideoAd({ adId });
+    const ssv = buildRewardSsv(userId);
+    if (!ssv) throw new Error('User id is required for AdMob SSV rewards');
+    const listenerHandles = [];
+    const listenerReady = [];
+    let settled = false;
+
+    function cleanupListeners() {
+      while (listenerHandles.length) {
+        const handle = listenerHandles.pop();
+        try { handle?.remove?.(); } catch (_) {}
+      }
+    }
+
     const rewardPromise = new Promise((resolve) => {
-      const off = AdMob.addListener(RewardAdPluginEvents.Rewarded, (reward) => {
-        off?.remove?.();
-        resolve({ reward, completed: true, source: 'admob-native' });
-      });
-      AdMob.addListener(RewardAdPluginEvents.Dismissed, () => {
-        resolve({ reward: null, completed: false, source: 'admob-native' });
-      });
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        cleanupListeners();
+        resolve(value);
+      };
+      listenerReady.push(Promise.resolve(AdMob.addListener(RewardAdPluginEvents.Rewarded, (reward) => {
+        finish({ reward, completed: true, source: 'admob-native', ssvPending: true });
+      })).then((handle) => listenerHandles.push(handle)).catch(() => {}));
+      listenerReady.push(Promise.resolve(AdMob.addListener(RewardAdPluginEvents.Dismissed, () => {
+        finish({ reward: null, completed: false, source: 'admob-native' });
+      })).then((handle) => listenerHandles.push(handle)).catch(() => {}));
+      listenerReady.push(Promise.resolve(AdMob.addListener(RewardAdPluginEvents.FailedToShow, (error) => {
+        finish({ reward: null, completed: false, source: 'admob-native', error: error?.message || 'ad failed to show' });
+      })).then((handle) => listenerHandles.push(handle)).catch(() => {}));
     });
-    await AdMob.showRewardVideoAd();
-    return rewardPromise;
+
+    await Promise.all(listenerReady);
+    await AdMob.prepareRewardVideoAd({ adId, ssv });
+    const shownReward = await AdMob.showRewardVideoAd();
+    const eventResult = await Promise.race([
+      rewardPromise,
+      new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+    ]);
+    if (eventResult) return eventResult;
+    cleanupListeners();
+    if (shownReward) {
+      return { reward: shownReward, completed: true, source: 'admob-native', ssvPending: true };
+    }
+    return { reward: null, completed: false, source: 'admob-native' };
   } catch (e) {
     console.warn('[native] showRewardedAd failed:', e?.message);
-    return { reward: null, completed: false, error: e?.message };
+    return { reward: null, completed: false, source: 'admob-native', error: e?.message };
   }
 }
 
@@ -161,6 +242,15 @@ export async function initPush(onToken) {
 // ── Status bar / safe area ──────────────────────────────────────────────
 export async function configureNativeShell() {
   if (!isCapacitor) return;
+
+  // APK performance flags - o'yin qotib qolmasin
+  window.__DURAK_PERF_LITE__ = true;
+  window.__DURAK_DISABLE_BLUR__ = true;
+  window.__DURAK_MAX_FPS__ = 15;
+
+  // HTML ga native class qo'sh
+  document.documentElement.classList.add('capacitor-native');
+
   try {
     const { StatusBar, Style } = await import('@capacitor/status-bar');
     await StatusBar.setOverlaysWebView?.({ overlay: false });
@@ -170,9 +260,18 @@ export async function configureNativeShell() {
   try {
     const { SafeArea } = await import('capacitor-plugin-safe-area');
     const { insets } = await SafeArea.getSafeAreaInsets();
-    document.documentElement.style.setProperty('--safe-top',    `${insets.top}px`);
-    document.documentElement.style.setProperty('--safe-bottom', `${insets.bottom}px`);
-    document.documentElement.style.setProperty('--safe-left',   `${insets.left || 0}px`);
-    document.documentElement.style.setProperty('--safe-right',  `${insets.right || 0}px`);
+    const root = document.documentElement;
+    const top = Number(insets.top || 0);
+    const right = Number(insets.right || 0);
+    const bottom = Number(insets.bottom || 0);
+    const left = Number(insets.left || 0);
+    root.style.setProperty('--safe-top', `${top}px`);
+    root.style.setProperty('--safe-bottom', `${bottom}px`);
+    root.style.setProperty('--safe-left', `${left}px`);
+    root.style.setProperty('--safe-right', `${right}px`);
+    root.style.setProperty('--durak-safe-top', `${top}px`);
+    root.style.setProperty('--durak-safe-bottom', `${bottom}px`);
+    root.style.setProperty('--durak-safe-left', `${left}px`);
+    root.style.setProperty('--durak-safe-right', `${right}px`);
   } catch (_) { /* ignore */ }
 }

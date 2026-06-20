@@ -92,7 +92,15 @@ function spawnPaired(io, manager, entries, opts) {
       botLevel: 'medium',
     });
     for (const e of entries) {
-      const seat = room.join({ id: e.userId, username: e.socket.user.username });
+      const seat = room.join({
+        id: e.userId,
+        username: e.socket.user.username,
+        nickname: e.socket.user.nickname,
+        avatar_url: e.socket.user.avatar_url,
+        selected_avatar_frame: e.socket.user.selected_avatar_frame,
+        country_code: e.socket.user.country_code,
+        rankWins: Number(e.socket.user.rank_wins || e.socket.user.games_won || 0),
+      });
       if (seat.ok) {
         e.socket.join(`room:${room.code}`);
         const seatObj = room.seats[seat.seatIdx];
@@ -119,7 +127,15 @@ function spawnSolo(io, manager, entry, opts) {
       isPrivate: false,
       botLevel: 'medium',
     });
-    const seat = room.join({ id: entry.userId, username: entry.socket.user.username });
+    const seat = room.join({
+      id: entry.userId,
+      username: entry.socket.user.username,
+      nickname: entry.socket.user.nickname,
+      avatar_url: entry.socket.user.avatar_url,
+      selected_avatar_frame: entry.socket.user.selected_avatar_frame,
+      country_code: entry.socket.user.country_code,
+      rankWins: Number(entry.socket.user.rank_wins || entry.socket.user.games_won || 0),
+    });
     if (seat.ok) {
       entry.socket.join(`room:${room.code}`);
       const seatObj = room.seats[seat.seatIdx];

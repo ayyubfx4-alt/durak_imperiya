@@ -64,11 +64,11 @@ export default function RoomMonitor() {
   });
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Room Monitor</h1>
         <input
-          className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-sm"
+          className="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm sm:w-72"
           placeholder="Filter by code / host / mode…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
@@ -77,7 +77,7 @@ export default function RoomMonitor() {
 
       {err && <div className="text-red-400 mb-3">{err}</div>}
 
-      <div className="grid grid-cols-3 gap-4 mb-5">
+      <div className="grid gap-3 sm:grid-cols-3">
         <Stat label="Total rooms" value={rooms.length} />
         <Stat label="Playing" value={rooms.filter((r) => r.phase === 'playing').length} accent="#10b981" />
         <Stat label="Lobby" value={rooms.filter((r) => r.phase === 'lobby').length} accent="#64748b" />
@@ -85,7 +85,8 @@ export default function RoomMonitor() {
 
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[760px] text-sm">
             <thead className="bg-slate-800">
               <tr>
                 <th className="text-left px-3 py-2">Code</th>
@@ -128,6 +129,39 @@ export default function RoomMonitor() {
               ))}
             </tbody>
           </table>
+          </div>
+          <div className="md:hidden">
+            {filtered.length === 0 && (
+              <div className="px-3 py-8 text-center text-sm text-slate-500">No active rooms</div>
+            )}
+            {filtered.map((r) => (
+              <article
+                key={r.code}
+                className={`border-b border-slate-800 p-3 text-sm last:border-b-0 ${selected === r.code ? 'bg-slate-800/60' : ''}`}
+                onClick={() => viewDetail(r.code)}
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <span className="font-mono font-bold text-[#f5a623]">{r.code}</span>
+                  <span className="rounded px-2 py-1 text-xs font-bold text-white" style={{ background: PHASE_COLOR[r.phase] || '#444' }}>
+                    {r.phase}
+                  </span>
+                </div>
+                <div className="grid grid-cols-[86px_1fr] gap-2 text-slate-300">
+                  <span className="text-xs uppercase text-slate-500">Mode</span><span>{r.mode || 'classic'}</span>
+                  <span className="text-xs uppercase text-slate-500">Seats</span><span>{r.realPlayers || 0}/{r.maxPlayers || '?'} ({r.bots || 0} bot)</span>
+                  <span className="text-xs uppercase text-slate-500">Stake</span><span>{(r.stake || 0).toLocaleString()}</span>
+                  <span className="text-xs uppercase text-slate-500">Host</span><span className="min-w-0 truncate">{r.host || '-'}</span>
+                </div>
+                <button
+                  className="mt-3 w-full rounded border border-red-700 px-3 py-2 text-xs font-bold text-red-300"
+                  disabled={busy === r.code}
+                  onClick={(e) => { e.stopPropagation(); closeRoom(r.code); }}
+                >
+                  {busy === r.code ? '...' : 'Close'}
+                </button>
+              </article>
+            ))}
+          </div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">

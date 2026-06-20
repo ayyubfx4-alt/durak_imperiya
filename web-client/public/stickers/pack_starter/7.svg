@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><radialGradient id="g" cx=".35" cy=".25" r=".8"><stop stop-color="#fff8c5"/><stop offset=".48" stop-color="#f3bd42"/><stop offset="1" stop-color="#7c2d12"/></radialGradient></defs>
+  <rect width="512" height="512" rx="96" fill="#070707"/>
+  <circle cx="256" cy="256" r="178" fill="url(#g)"/>
+  <path d="M176 196c20-34 52-52 80-52s60 18 80 52M174 314c48 48 116 48 164 0" fill="none" stroke="#111827" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="206" cy="244" r="22" fill="#111827"/>
+  <circle cx="306" cy="244" r="22" fill="#111827"/>
+  <text x="256" y="452" text-anchor="middle" font-family="Arial Black,Arial,sans-serif" font-size="44" fill="#fff2b6">SMILE</text>
+</svg>

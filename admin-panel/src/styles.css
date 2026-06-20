@@ -104,3 +104,94 @@ select option { background: #111118; color: #f7f7fb; }
   0% { background-position: 100% 0; }
   100% { background-position: 0 0; }
 }
+
+.admin-shell,
+.admin-main,
+.admin-modal {
+  min-width: 0;
+}
+
+.admin-main *,
+.admin-modal * {
+  min-width: 0;
+}
+
+.admin-main h1 {
+  line-height: 1.12;
+}
+
+.admin-main .btn,
+.admin-modal .btn {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.admin-main input,
+.admin-main select,
+.admin-main textarea,
+.admin-modal input,
+.admin-modal select,
+.admin-modal textarea {
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  body {
+    min-width: 0;
+  }
+
+  .admin-sidebar {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .admin-header-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .admin-main {
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .admin-main h1 {
+    font-size: 1.35rem;
+  }
+
+  .admin-main .card {
+    overflow-wrap: anywhere;
+  }
+
+  .admin-main [class*="grid-cols-"],
+  .admin-modal [class*="grid-cols-"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .admin-main [class*="xl:grid-cols-"],
+  .admin-main [class*="lg:grid-cols-"],
+  .admin-main [class*="md:grid-cols-"],
+  .admin-modal [class*="xl:grid-cols-"],
+  .admin-modal [class*="lg:grid-cols-"],
+  .admin-modal [class*="md:grid-cols-"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .admin-main .btn,
+  .admin-modal .btn {
+    width: 100%;
+  }
+
+  .admin-modal [aria-label="Close"] {
+    width: 2.25rem;
+    flex: 0 0 2.25rem;
+  }
+
+  .admin-modal {
+    border-left: 0;
+    border-right: 0;
+  }
+}
+
+@media (max-width: 380px) {
+  .admin-header-metrics {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

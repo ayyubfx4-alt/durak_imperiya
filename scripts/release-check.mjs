@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function read(relPath) {
-  return readFileSync(resolve(root, relPath), 'utf8');
+  return readFileSync(resolve(root, relPath), 'utf8').replace(/^\uFEFF/, '');
 }
 
 function assertCheck(label, condition, hint = '') {
@@ -37,7 +37,32 @@ assertCheck('Capacitor does not force a localhost/server.url build', !capacitorC
 
 const androidVariables = read('capacitor/android/variables.gradle');
 const targetSdk = Number(androidVariables.match(/targetSdkVersion\s*=\s*(\d+)/)?.[1] || 0);
-assertCheck('Android targetSdkVersion is 35+', targetSdk >= 35, `Found targetSdkVersion=${targetSdk}`);
+const compileSdk = Number(androidVariables.match(/compileSdkVersion\s*=\s*(\d+)/)?.[1] || 0);
+assertCheck('Android targetSdkVersion is 36+', targetSdk >= 36, `Found targetSdkVersion=${targetSdk}`);
+assertCheck('Android compileSdkVersion is 36+', compileSdk >= 36, `Found compileSdkVersion=${compileSdk}`);
+const androidAppGradle = read('capacitor/android/app/build.gradle');
+assertCheck('Android release enables R8 minification', /release\s*\{[\s\S]*minifyEnabled\s+true/.test(androidAppGradle));
+assertCheck('Android release enables resource shrinking', /release\s*\{[\s\S]*shrinkResources\s+true/.test(androidAppGradle));
+assertCheck('Android release is not debuggable', /release\s*\{[\s\S]*debuggable\s+false/.test(androidAppGradle));
+const proguardRules = read('capacitor/android/app/proguard-rules.pro');
+assertCheck(
+  'Android ProGuard keeps Capacitor/Cordova/WebView bridges',
+  proguardRules.includes('com.getcapacitor')
+    && proguardRules.includes('org.apache.cordova')
+    && proguardRules.includes('@android.webkit.JavascriptInterface'),
+);
+const androidReleaseScript = read('scripts/build-android-release.ps1');
+assertCheck(
+  'Android release script supports secure env keystore',
+  androidReleaseScript.includes('ANDROID_KEYSTORE_BASE64')
+    && androidReleaseScript.includes('ANDROID_KEYSTORE_PASSWORD')
+    && androidReleaseScript.includes('ANDROID_KEY_ALIAS')
+    && androidReleaseScript.includes('ANDROID_KEY_PASSWORD'),
+);
+assertCheck(
+  'Strict Android release refuses generated keystores',
+  androidReleaseScript.includes('Strict store release requires a real release keystore'),
+);
 
 const androidManifest = read('capacitor/android/app/src/main/AndroidManifest.xml');
 assertCheck('Android cleartext traffic is blocked', androidManifest.includes('android:usesCleartextTraffic="false"'));
@@ -57,13 +82,66 @@ assertCheck(
   androidNetworkSecurity.includes('cleartextTrafficPermitted="false"'),
 );
 const nativeConfig = read('web-client/public/native-config.js');
+const runtimeConfig = read('web-client/public/runtime-config.js');
+const runtimeConfigTemplate = read('web-client/public/runtime-config.js.template');
+const runtimeConfigEntrypoint = read('web-client/docker-entrypoint.d/30-runtime-config.sh');
+const webClientDockerfile = read('web-client/Dockerfile');
+const webClientNginx = read('web-client/nginx.conf');
 const apiClient = read('web-client/public/src/api.js');
 const indexHtmlNative = read('web-client/public/index.html');
+const deployCompose = read('docker-compose.deploy.yml');
+const envExample = read('.env.example');
+const productionRoute = read('backend/src/routes/production.js');
 assertCheck(
   'Native release source does not hardcode the HTTP test server',
   !nativeConfig.includes('http://')
+    && !runtimeConfig.includes('http://')
     && !apiClient.includes('http://62.171.185.105')
     && !indexHtmlNative.includes('http://62.171.185.105'),
+);
+assertCheck(
+  'Runtime config is loaded before native config',
+  indexHtmlNative.includes('/runtime-config.js?v=180-admob-runtime-config')
+    && indexHtmlNative.indexOf('/runtime-config.js') < indexHtmlNative.indexOf('/native-config.js'),
+);
+assertCheck(
+  'Web Docker image injects runtime config from env',
+  webClientDockerfile.includes('30-runtime-config.sh')
+    && runtimeConfigTemplate.includes('__ADMOB_REWARDED_ANDROID_ID__')
+    && runtimeConfigTemplate.includes('__ADMOB_SSV_CALLBACK_URL__'),
+);
+assertCheck(
+  'Runtime config exposes voice ICE servers',
+  runtimeConfigTemplate.includes('__DURAK_ICE_SERVERS__')
+    && runtimeConfigEntrypoint.includes('VOICE_ICE_SERVERS')
+    && runtimeConfigEntrypoint.includes('TURN_USER')
+    && runtimeConfigEntrypoint.includes('TURN_PASSWORD')
+    && runtimeConfigEntrypoint.includes('turn_host')
+    && runtimeConfigEntrypoint.includes('stun:stun.l.google.com:19302')
+    && runtimeConfigEntrypoint.includes('turn:'),
+);
+assertCheck(
+  'Deploy compose includes a TURN relay for voice chat',
+  deployCompose.includes('coturn/coturn')
+    && deployCompose.includes('3478:3478/udp')
+    && deployCompose.includes('3478:3478/tcp')
+    && deployCompose.includes('49160-49200:49160-49200/udp')
+    && deployCompose.includes('TURN_USER:?TURN_USER must be set')
+    && deployCompose.includes('TURN_PASSWORD:?TURN_PASSWORD must be set')
+    && deployCompose.includes('VOICE_ICE_SERVERS'),
+);
+assertCheck(
+  'Production readiness blocks voice deploys without TURN',
+  productionRoute.includes('VOICE_ICE_SERVERS')
+    && productionRoute.includes('TURN_USER')
+    && productionRoute.includes('TURN_PASSWORD')
+    && productionRoute.includes('voice.ice.turn')
+    && productionRoute.includes('voice.turn.credentials'),
+);
+assertCheck(
+  'Nginx serves runtime config without cache',
+  webClientNginx.includes('location = /runtime-config.js')
+    && webClientNginx.includes('no-store, no-cache'),
 );
 const testApkScript = read('scripts/build-android-test-apk.ps1');
 assertCheck(
@@ -90,7 +168,14 @@ assertCheck('Baraban 10-game unlock migration exists', playMigration.includes("(
 const homePage = read('web-client/public/src/pages/home.js');
 const mainJs = read('web-client/public/src/main.js');
 const indexHtml = read('web-client/public/index.html');
+const supportWidget = read('web-client/public/src/supportWidget.js');
+const supportRoute = read('backend/src/routes/support.js');
+const telegramBotService = read('backend/src/services/telegramBot.js');
+const serviceWorker = read('web-client/public/sw.js');
+const nativeBridge = read('web-client/public/src/native/capacitor-bridge.js');
 const barabanService = read('backend/src/services/baraban.js');
+const adminApi = read('admin-panel/src/api.js');
+const adminAnalyticsPage = read('admin-panel/src/pages/Analytics.jsx');
 const barabanPanelReturns = homePage.match(/return h\('section', \{ class: 'dash-promo baraban'/g)?.length || 0;
 assertCheck(
   'Baraban countdown has a live one-second timer',
@@ -111,16 +196,59 @@ assertCheck(
   `Found ${barabanPanelReturns} baraban render return(s)`,
 );
 assertCheck(
-  'Home cache-bust version includes live countdown build',
-  mainJs.includes('home.js?v=146-live-countdown')
+  'Home cache-bust version includes home scope fix build',
+  mainJs.includes('home.js?v=172-home-scope-fix')
     && indexHtml.includes('/src/main.js?v=147-live-ui')
     && indexHtml.includes('/styles.css?v=147-live-ui'),
 );
+assertCheck(
+  'Support widget sends Telegram WebApp initData for verified ticket replies',
+  mainJs.includes('supportWidget.js?v=170-telegram-support')
+    && supportWidget.includes('telegramSupportContext')
+    && supportWidget.includes('initData: typeof tg.initData'),
+);
+assertCheck(
+  'Backend verifies Telegram initData before support bot notification',
+  telegramBotService.includes('verifyTelegramWebAppInitData')
+    && telegramBotService.includes('crypto.timingSafeEqual')
+    && supportRoute.includes('verifiedTelegramSupportContext')
+    && supportRoute.includes('notifyTelegramSupportReply'),
+);
+assertCheck(
+  'Service worker cache is bumped for AdMob runtime config build',
+  serviceWorker.includes("durak-v21-admob-runtime-config")
+    && serviceWorker.includes("pathname === '/runtime-config.js'")
+    && indexHtml.includes('180-admob-runtime-config'),
+);
+assertCheck(
+  'Native rewarded ads send AdMob SSV user identity',
+  nativeBridge.includes('ssv')
+    && nativeBridge.includes('customData')
+    && nativeBridge.includes('ssvPending')
+    && nativeBridge.includes('onRewardedVideoAdReward'),
+);
+assertCheck(
+  'Admin analytics shows customer countries, donors, premium and purchases',
+  adminApi.includes('analyticsCustomerActivity')
+    && adminAnalyticsPage.includes("Donat qilgan o'yinchilar")
+    && adminAnalyticsPage.includes('Premium sotib olganlar')
+    && adminAnalyticsPage.includes('Stiker sotib olganlar')
+    && adminAnalyticsPage.includes('Boshqa narsalar sotib olganlar'),
+);
 
 const prodEnv = read('docs/production.env.example');
-assertCheck('Ad reward cap is documented as 1000', prodEnv.includes('AD_BALANCE_CAP=1000'));
-assertCheck('Production env documents target SDK 35+', /ANDROID_TARGET_SDK=(3[5-9]|[4-9]\d)/.test(prodEnv));
+assertCheck('Ad reward cap is documented as 50000', prodEnv.includes('AD_BALANCE_CAP=50000'));
+assertCheck('Production env documents target SDK 36+', /ANDROID_TARGET_SDK=(3[6-9]|[4-9]\d)/.test(prodEnv));
 assertCheck('Production env documents Billing 8+', /GOOGLE_PLAY_BILLING_MAJOR=([8-9]|\d{2,})/.test(prodEnv));
+assertCheck(
+  'Production env documents TURN voice chat config',
+  prodEnv.includes('TURN_USER=')
+    && prodEnv.includes('TURN_PASSWORD=')
+    && prodEnv.includes('VOICE_ICE_SERVERS=')
+    && prodEnv.includes('stun:stun.l.google.com:19302')
+    && prodEnv.includes('turn:YOUR_DOMAIN:3478?transport=udp')
+    && envExample.includes('turn:your-domain.example:3478?transport=udp'),
+);
 
 if (process.platform === 'win32') {
   run('backend tests', 'cmd.exe', ['/d', '/s', '/c', 'npm test'], `${root}/backend`);

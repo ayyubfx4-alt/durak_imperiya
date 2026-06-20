@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { query } from '../db.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
@@ -9,7 +10,7 @@ let webAppUrlWarningShown = false;
 const adminSessions = new Map();
 
 const BOT_COMMANDS = [
-  { command: 'start', description: "O'yinni ochish" },
+  { command: 'start', description: "O'yinni boshlash" },
   { command: 'play', description: "Durak Imperia'ni boshlash" },
   { command: 'admin', description: 'Admin panel' },
 ];
@@ -17,7 +18,7 @@ const BOT_COMMANDS = [
 const WELCOME_TEXT = [
   "Durak Imperia'ga xush kelibsiz.",
   '',
-  "O'yinni bot ichida oching yoki Play Marketdan ilovani yuklab oling.",
+  "O'yinni boshlash uchun pastdagi tugmani bosing.",
 ].join('\n');
 
 const HELP_TEXT = [
@@ -89,17 +90,6 @@ function heroImageUrl() {
   }
 }
 
-function routeUrl(hashPath) {
-  const base = gameLaunchUrl();
-  try {
-    const url = new URL(base);
-    url.hash = hashPath;
-    return url.toString();
-  } catch {
-    return base;
-  }
-}
-
 function webAppInfoForUrl(url) {
   try {
     const parsed = new URL(url);
@@ -153,7 +143,7 @@ function linkButton(text, url, webApp = null) {
 function launchButton() {
   const webApp = telegramWebAppInfo();
   if (!webApp) warnIfWebAppUnavailable();
-  return linkButton("O'yinni ochish", gameLaunchUrl(), webApp);
+  return linkButton("🔴 O'yinni boshlash 👑", gameLaunchUrl(), webApp);
 }
 
 function playMarketButton() {
@@ -170,7 +160,6 @@ function adminPanelButton() {
 function launchKeyboard() {
   const rows = [
     [launchButton()],
-    [playMarketButton()],
   ];
   return { inline_keyboard: rows };
 }
@@ -225,6 +214,59 @@ function identityFrom(source) {
 function commandFromText(text) {
   const match = String(text || '').match(/^\/([a-z0-9_]+)(?:@\w+)?/i);
   return match ? match[1].toLowerCase() : null;
+}
+
+export function verifyTelegramWebAppInitData(initData, { maxAgeSeconds = 24 * 60 * 60 } = {}) {
+  if (!enabled()) return null;
+  const raw = String(initData || '').trim();
+  if (!raw) return null;
+
+  const params = new URLSearchParams(raw);
+  const hash = String(params.get('hash') || '').trim();
+  if (!/^[a-f0-9]{64}$/i.test(hash)) return null;
+  params.delete('hash');
+
+  const dataCheckString = [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+  if (!dataCheckString) return null;
+
+  const secret = crypto
+    .createHmac('sha256', 'WebAppData')
+    .update(config.telegram.botToken)
+    .digest();
+  const digest = crypto
+    .createHmac('sha256', secret)
+    .update(dataCheckString)
+    .digest('hex');
+
+  const expected = Buffer.from(digest, 'hex');
+  const provided = Buffer.from(hash, 'hex');
+  if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+    return null;
+  }
+
+  const authDate = Number(params.get('auth_date') || 0);
+  const now = Math.floor(Date.now() / 1000);
+  if (maxAgeSeconds > 0 && (!Number.isFinite(authDate) || authDate <= 0 || now - authDate > maxAgeSeconds)) {
+    return null;
+  }
+
+  let user = null;
+  try {
+    user = JSON.parse(params.get('user') || 'null');
+  } catch (_) {
+    user = null;
+  }
+
+  return {
+    authDate,
+    user,
+    chatType: params.get('chat_type') || null,
+    chatInstance: params.get('chat_instance') || null,
+    startParam: params.get('start_param') || null,
+  };
 }
 
 async function logTelegramEvent(eventType, source, payload = {}) {

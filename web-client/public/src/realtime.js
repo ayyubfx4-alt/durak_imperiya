@@ -2,12 +2,14 @@ import { api, getToken } from './api.js';
 import { state, emit, on } from './state.js';
 import { ensureSocket, getSocket } from './socket.js';
 
-const POLL_MS = 12000;
-const MIN_REFRESH_GAP_MS = 850;
+const POLL_MS = 45000;
+const MIN_REFRESH_GAP_MS = 3000;
+const WAKE_REFRESH_GAP_MS = 30000;
 
 let started = false;
 let inFlight = null;
 let lastSyncAt = 0;
+let lastWakeSyncAt = 0;
 let lastSignature = '';
 let pollTimer = null;
 let wiredSocket = null;
@@ -15,6 +17,9 @@ let wiredSocket = null;
 const USER_FIELDS = [
   'coins',
   'gold_coins',
+  'rating',
+  'level',
+  'level_progress',
   'tournament_tickets',
   'elon_stickers',
   'games_played',
@@ -93,9 +98,8 @@ export async function refreshLiveState(reason = 'manual', options = {}) {
   return inFlight;
 }
 
-export function startLiveSync({ onChange, onHeartbeat } = {}) {
+export function startLiveSync({ onChange } = {}) {
   if (onChange) on('live:changed', onChange);
-  if (onHeartbeat) on('live:heartbeat', onHeartbeat);
   if (started) return;
   started = true;
   lastSignature = userSignature(state.user);
@@ -108,18 +112,25 @@ export function startLiveSync({ onChange, onHeartbeat } = {}) {
 
   const heartbeat = async (reason = 'poll') => {
     if (document.hidden) return;
-    const result = await refreshLiveState(reason);
-    emit('live:heartbeat', { reason, changed: Boolean(result?.changed) });
+    await refreshLiveState(reason);
+  };
+
+  const wakeSync = (reason) => {
+    const now = Date.now();
+    if (now - lastWakeSyncAt < WAKE_REFRESH_GAP_MS) return;
+    lastWakeSyncAt = now;
+    heartbeat(reason);
   };
 
   pollTimer = setInterval(() => heartbeat('poll'), POLL_MS);
-  window.addEventListener('focus', () => heartbeat('focus'));
+  window.addEventListener('focus', () => wakeSync('focus'));
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) heartbeat('visible');
+    if (!document.hidden) wakeSync('visible');
   });
 }
 
 export function stopLiveSync() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
+  started = false;
 }

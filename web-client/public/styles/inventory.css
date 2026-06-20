@@ -1666,6 +1666,49 @@
   margin: 12px auto;
 }
 
+.inv87-chest-desc {
+  display: block;
+  margin: -2px 0 4px;
+  color: rgba(255, 237, 185, .66);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.inv87-drop-copies {
+  position: relative;
+  min-height: 232px;
+  display: grid;
+  place-items: center;
+  margin: 8px 0 6px;
+}
+
+.inv87-drop-copy {
+  grid-area: 1 / 1;
+  transform: translateX(calc((var(--copy-i, 0) - .5) * 42px)) rotate(calc((var(--copy-i, 0) - .5) * 7deg));
+}
+
+.inv87-drop-copies.copies-1 .inv87-drop-copy {
+  transform: none;
+}
+
+.inv87-drop-copies.copies-3 .inv87-drop-copy {
+  transform: translateX(calc((var(--copy-i, 0) - 1) * 54px)) rotate(calc((var(--copy-i, 0) - 1) * 7deg));
+}
+
+.inv87-drop-multiplier {
+  display: inline-grid;
+  place-items: center;
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 227, 135, .55);
+  border-radius: 999px;
+  color: #170b02 !important;
+  background: linear-gradient(180deg, #fff3ba, #d39a28);
+  box-shadow: 0 10px 26px rgba(0,0,0,.35);
+}
+
 .inv87-drop-modal h2 {
   margin: 6px 0 2px;
   color: #fff3bd;

@@ -31,7 +31,7 @@ test('telegram service has production command, callback, image, Play Market, and
   assert.match(service, /sendTelegramVideo/);
   assert.match(service, /heroImageUrl/);
   assert.match(service, /playMarketButton/);
-  assert.match(service, /function launchKeyboard\(\) \{\s*const rows = \[\s*\[launchButton\(\)\],\s*\[playMarketButton\(\)\],\s*\];/s);
+  assert.match(service, /function launchKeyboard\(\) \{\s*const rows = \[\s*\[launchButton\(\)\],\s*\];/s);
   assert.match(service, /function adminInlineKeyboard\(\) \{\s*return \{\s*inline_keyboard: \[\s*\[adminPanelButton\(\)\],\s*\],/s);
   assert.match(service, /ADMIN_BUTTONS/);
   assert.match(service, /Hisob-kitob/);

@@ -64,8 +64,7 @@ paymentsRouter.post('/iap', authRequired, async (req, res, next) => {
 
 let _stripe = null;
 function stripeUsable() {
-  return Boolean(config.stripe.secretKey)
-    && !(config.env === 'production' && config.stripe.secretKey.startsWith('sk_test_'));
+  return Boolean(config.stripe.secretKey);
 }
 
 async function stripe() {

@@ -1,0 +1,123 @@
+# Durak Imperia v6 — alohida server deploy (mavjud durak_imperia bilan aralashmasin)
+# Portlar: backend 15000, web 19080, admin 19081, support 19082
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-durak_v6}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-durak_v6}
+    volumes:
+      - pgdata_v6:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-durak_v6} -d ${POSTGRES_DB:-durak_v6}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [durakv6net]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", "60", "100"]
+    volumes:
+      - redisdata_v6:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [durakv6net]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-durak_v6}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-durak_v6}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN required}
+      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:-admin@durakv6.local}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-2202}
+      ADMIN_PIN: ${ADMIN_PIN:-2202}
+      INSTANCE_ID: ${INSTANCE_ID:-durak-v6-be-1}
+      INSTANCE_PREFIX: ${INSTANCE_PREFIX:-durak-v6-be}
+      INSTANCE_COUNT: ${INSTANCE_COUNT:-1}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      PRIVACY_POLICY_URL: ${PRIVACY_POLICY_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_GAME_URL: ${TELEGRAM_GAME_URL:-}
+      TELEGRAM_ADMIN_URL: ${TELEGRAM_ADMIN_URL:-}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-8324791195}
+      TELEGRAM_ADMIN_IDS: ${TELEGRAM_ADMIN_IDS:-}
+      TELEGRAM_BOT_POLLING_ENABLED: ${TELEGRAM_BOT_POLLING_ENABLED:-1}
+      TELEGRAM_BOT_INSTANCE_ID: ${TELEGRAM_BOT_INSTANCE_ID:-durak-v6-be-1}
+      TELEGRAM_DROP_PENDING_UPDATES: ${TELEGRAM_DROP_PENDING_UPDATES:-1}
+      TELEGRAM_STARS_ENABLED: ${TELEGRAM_STARS_ENABLED:-1}
+      RELEASE_PLATFORMS: ${RELEASE_PLATFORMS:-android}
+      GOOGLE_PLAY_PACKAGE_NAME: ${GOOGLE_PLAY_PACKAGE_NAME:-com.durakimperia.game}
+      USE_NODE_BACKEND_ONLY: ${USE_NODE_BACKEND_ONLY:-1}
+      GDEVELOP_SILVER_ACTIVE: ${GDEVELOP_SILVER_ACTIVE:-0}
+      ALLOW_MOCK_IAP: ${ALLOW_MOCK_IAP:-0}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLIC_KEY: ${STRIPE_PUBLIC_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "15000:4000"
+    volumes:
+      - admin_uploads_v6:/app/uploads
+    networks: [durakv6net]
+
+  web-client:
+    build:
+      context: ./web-client
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "19080:80"
+    networks: [durakv6net]
+
+  admin-panel:
+    build:
+      context: ./admin-panel
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "19081:80"
+    networks: [durakv6net]
+
+  support-panel:
+    build:
+      context: ./support-panel
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "19082:80"
+    networks: [durakv6net]
+
+volumes:
+  pgdata_v6:
+  redisdata_v6:
+  admin_uploads_v6:
+
+networks:
+  durakv6net:
+    driver: bridge

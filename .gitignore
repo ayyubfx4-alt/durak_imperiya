@@ -30,3 +30,17 @@ login-mobile-*.png
 mobile-*.png
 support-*.png
 admin-panel-dev.*.log
+
+# Production secrets — NEVER commit these
+.env.prod
+.env.production.local
+backend/.env.prod
+backend/logs/
+
+# PM2 runtime files
+backend/.pm2/
+logs/
+*.pm2
+
+# Sentry sourcemaps
+.sentryclirc

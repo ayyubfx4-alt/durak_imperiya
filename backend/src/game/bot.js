@@ -122,8 +122,9 @@ function defenseDecision(state, player, level) {
 
   // ── EASY: random valid move, with mistakes ────────────────────
   if (level === 'easy') {
-    // Easy bot may take cards even when defendable (~15% chance)
-    if (randomInt(100) < 15) return { action: 'take' };
+    // Easy bot may take cards even when defendable. New players should be
+    // able to beat bots while they are learning the table.
+    if (randomInt(100) < 24) return { action: 'take' };
     // Sometimes wastes high trump on low attack (mistake)
     if (randomInt(100) < 30 && trumpDefs.length) {
       return { action: 'defense', card: pick(trumpDefs) };
@@ -204,8 +205,8 @@ function attackDecision(state, player, level) {
 
   // ── EASY ──────────────────────────────────────────────────────
   if (level === 'easy') {
-    // ~30% chance to pass even with valid moves
-    if (state.table.length > 0 && randomInt(100) < 30) return { action: 'pass' };
+    // ~42% chance to pass even with valid moves
+    if (state.table.length > 0 && randomInt(100) < 42) return { action: 'pass' };
     return { action: 'attack', card: randomInt(100) < 45 ? ordered[0] : pick(valid) };
   }
 

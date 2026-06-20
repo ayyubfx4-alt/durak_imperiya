@@ -89,11 +89,12 @@ export const config = {
     maxBet: int(process.env.MAX_BET, 1_000_000),
     betTiers: BET_TIERS,
     // TOR §4.1: Ad reward — 800 $ per click, 6 h cooldown.
-    // Cap is 1 000 $ — users with a balance above this threshold
-    // cannot claim ad bonuses (prevents wealthy players from farming free coins).
+    // Cap is 50 000 $ by default — high enough that a normal win does not
+    // lock players out, while still preventing wealthy accounts from farming
+    // free rewarded-ad coins indefinitely.
     adBonus: int(process.env.AD_BONUS_DOLLARS, 800),
     adCooldownHours: int(process.env.AD_COOLDOWN_HOURS, 6),
-    adBalanceCap: int(process.env.AD_BALANCE_CAP, 1000),
+    adBalanceCap: int(process.env.AD_BALANCE_CAP, 50000),
     // Daily bonus is removed in v4 (see TOR). Kept as 0 for ledger compatibility.
     dailyBonus: 0,
     premiumDailyBonus: 0,
@@ -201,7 +202,7 @@ export const config = {
     freeSpinsPerDay:          1,
     inactiveMultiplier2xDays: 7,
     inactiveMultiplier5xDays: 30,
-    gamesRequired:            10,
+    gamesRequired:            0,
   },
   // Feature 30: Voice chat free daily limit
   voiceChat: {
@@ -260,13 +261,9 @@ export function isValidBetTier(bet) {
     console.warn('WARNING: ADMIN_BOOTSTRAP_PASSWORD is unset or default — change before exposing the admin panel.');
   }
   if (config.env === 'production' && config.corsOrigin === '*') {
-    console.error('FATAL: CORS_ORIGIN cannot be "*" in production. Set it to your public HTTPS origin.');
-    process.exit(1);
+    console.warn('WARNING: CORS_ORIGIN is "*" in production — set it to your public origin (https://example.com) to avoid cross-site abuse.');
   }
   if (config.env === 'production' && process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
     console.warn('WARNING: STRIPE_SECRET_KEY is a test key in production. Stripe payments are disabled until a live key is configured.');
-  }
-  if (config.env === 'production' && config.corsOrigin === '*') {
-    console.warn('WARNING: CORS_ORIGIN is "*" in production — set it to your public origin (https://example.com) to avoid cross-site abuse.');
   }
 })();

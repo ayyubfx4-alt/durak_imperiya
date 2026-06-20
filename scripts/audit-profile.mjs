@@ -31,7 +31,10 @@ ok('Friend request locked state is explained', profilePage.includes("err?.data?.
 ok('Stats button opens real modal', profilePage.includes('rpOpenStatsModal(root, me'));
 ok('Referral button opens real API modal', profilePage.includes('rpOpenReferralModal(root)') && profilePage.includes('api.referralTree()'));
 ok('Edit profile opens nickname/avatar modal', profilePage.includes('rpOpenEditProfileModal(root)') && profilePage.includes('api.setNickname(nickname)') && profilePage.includes('rpOpenAvatarUpload(root)'));
-ok('Profile chat button routes to friends instead of inert text', profilePage.includes("['💬', 'CHAT', () => navigate('friends')]"));
+ok(
+  'Profile chat button routes to friends instead of inert text',
+  profilePage.includes("['💬', 'CHAT', () => navigate('friends')]"),
+);
 ok('Profile premium modal uses priceGoldCoins', profilePage.includes('p.priceGoldCoins || p.priceGold'));
 ok('Profile module is cache-busted', mainJs.includes('profile.js?v=149-profile-polish'));
 

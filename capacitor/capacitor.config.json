@@ -29,9 +29,16 @@
     "backgroundColor": "#0d0f1a"
   },
   "plugins": {
+    "Keyboard": {
+      "resize": "body",
+      "scrollAssist": true,
+      "resizeOnFullScreen": true
+    },
     "SplashScreen": {
-      "launchShowDuration": 1200,
+      "launchShowDuration": 2500,
       "launchAutoHide": true,
+      "splashFullScreen": true,
+      "splashImmersive": true,
       "backgroundColor": "#0d0f1a",
       "androidSplashResourceName": "splash",
       "iosSplash": "Splash",
@@ -48,6 +55,15 @@
     }
   }
 }
+
+
+
+
+
+
+
+
+
 
 
 

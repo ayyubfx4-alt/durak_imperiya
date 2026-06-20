@@ -3,6 +3,12 @@ import { API_BASE, getToken } from './api.js';
 
 let _socket = null;
 
+function isNativeShell() {
+  return !!(typeof window !== 'undefined'
+    && (window.__DURAK_NATIVE_SHELL__
+      || window.Capacitor?.isNativePlatform?.() === true));
+}
+
 function deviceId() {
   let id = localStorage.getItem('durak.deviceId');
   if (!id) {
@@ -13,29 +19,59 @@ function deviceId() {
 }
 
 export function connectSocket() {
-  if (_socket && _socket.connected) return _socket;
+  if (_socket) {
+    _socket.auth = { token: getToken(), deviceId: deviceId() };
+    if (!_socket.connected) _socket.connect?.();
+    return _socket;
+  }
   if (typeof window === 'undefined' || typeof window.io !== 'function') {
     throw new Error('Socket.IO yuklanmadi. Internet/server ulanishini tekshiring va sahifani yangilang.');
   }
+  const native = isNativeShell();
   const socketOptions = {
-    transports: ['websocket'],
+    transports: native ? ['polling', 'websocket'] : ['websocket', 'polling'],
+    upgrade: true,
     auth: { token: getToken(), deviceId: deviceId() },
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-    forceNew: true,
+    reconnectionDelay: native ? 500 : 1000,
+    reconnectionDelayMax: native ? 3000 : 5000,
+    timeout: native ? 15000 : 10000,
+    forceNew: false,
     autoConnect: true,
   };
-  // Always pass an explicit URL. Some Socket.IO builds treat `io(options)`
-  // inconsistently in production, leaving the client closed without emitting
-  // connect_error. Same-origin `/` keeps nginx reverse-proxy deployments stable.
   // eslint-disable-next-line no-undef
-  const target = window.io(API_BASE || '/', socketOptions);
+  const target = API_BASE ? window.io(API_BASE, socketOptions) : window.io(socketOptions);
   _socket = target;
   return _socket;
 }
 
 export function getSocket() { return _socket; }
+
+function waitForSocketConnected(timeoutMs = 10000) {
+  const s = connectSocket();
+  if (s.connected) return Promise.resolve(s);
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const cleanup = () => {
+      s.off?.('connect', onConnect);
+      s.off?.('connect_error', onError);
+    };
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      fn(value);
+    };
+    const onConnect = () => finish(resolve, s);
+    const onError = (err) => finish(reject, err || new Error('socket connect error'));
+    const timer = setTimeout(() => finish(reject, new Error('socket connect timeout')), timeoutMs);
+    s.once?.('connect', onConnect);
+    s.once?.('connect_error', onError);
+    s.connect?.();
+  });
+}
 
 /**
  * Ensure a connected socket — used by main.js to wire global listeners
@@ -44,13 +80,7 @@ export function getSocket() { return _socket; }
 export async function ensureSocket() {
   if (_socket && _socket.connected) return _socket;
   if (!getToken()) throw new Error('no auth token');
-  const s = connectSocket();
-  if (s.connected) return s;
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('socket connect timeout')), 8000);
-    s.once('connect', () => { clearTimeout(t); resolve(s); });
-    s.once('connect_error', (err) => { clearTimeout(t); reject(err); });
-  });
+  return waitForSocketConnected(isNativeShell() ? 15000 : 10000);
 }
 
 /**
@@ -78,11 +108,12 @@ export const socketProxy = new Proxy({}, {
 /** @deprecated getSocket() yoki connectSocket() ishlating */
 export { _socket as socket };
 
-export function emitWithAck(event, payload, timeout = 5000) {
+export async function emitWithAck(event, payload, timeout = 5000) {
+  const s = await waitForSocketConnected(Math.max(timeout, isNativeShell() ? 12000 : 7000));
   return new Promise((resolve, reject) => {
-    if (!_socket) return reject(new Error('not connected'));
+    if (!s?.connected) return reject(new Error('not connected'));
     const t = setTimeout(() => reject(new Error('socket timeout')), timeout);
-    _socket.emit(event, payload, (resp) => {
+    s.emit(event, payload, (resp) => {
       clearTimeout(t);
       resolve(resp);
     });

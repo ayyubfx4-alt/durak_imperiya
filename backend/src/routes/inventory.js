@@ -14,6 +14,7 @@ import {
   getEnabledAdminItems,
   getPriceOverrides,
 } from '../services/adminCatalog.js';
+import { cardSkinGiftableCopies } from '../services/giftEligibility.js';
 export { isExclusiveItem, REFERRAL_GENERATIONS_FOR_EXCLUSIVE };
 
 export const inventoryRouter = Router();
@@ -147,15 +148,16 @@ inventoryRouter.post('/card-collection/open-box', authRequired, async (req, res,
         );
       }
       const skin = rollRandomSkin(box);
+      const quantity = rollDropQuantity(box);
       await client.query(
         `INSERT INTO inventory (user_id, item_type, item_id, quantity)
-         VALUES ($1, 'card_skin', $2, 1)
+         VALUES ($1, 'card_skin', $2, $3)
          ON CONFLICT (user_id, item_type, item_id)
-         DO UPDATE SET quantity = inventory.quantity + 1`,
-        [req.user.id, skin.id]
+         DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity`,
+        [req.user.id, skin.id, quantity]
       );
       const updated = await client.query('UPDATE users SET selected_skin = $1 WHERE id = $2 RETURNING gold_coins, selected_skin', [skin.id, req.user.id]);
-      result = { ok: true, box: box.id, skin, goldCoins: Number(updated.rows[0]?.gold_coins || 0), selectedSkin: updated.rows[0]?.selected_skin };
+      result = { ok: true, box: box.id, skin, quantity, goldCoins: Number(updated.rows[0]?.gold_coins || 0), selectedSkin: updated.rows[0]?.selected_skin };
     });
     res.json(result);
   } catch (err) { next(err); }
@@ -177,6 +179,24 @@ function rollRandomSkin(box) {
   const list = candidates.length ? candidates : pool;
   if (!list.length) return SKIN_BY_ID.default;
   return list[Math.floor(Math.random() * list.length)];
+}
+
+function rollDropQuantity(box) {
+  const price = Number(box?.priceGold || 0);
+  const roll = Math.random();
+  if (price >= 500) {
+    if (roll < 0.18) return 3;
+    if (roll < 0.48) return 2;
+    return 1;
+  }
+  if (price >= 250) {
+    if (roll < 0.10) return 3;
+    if (roll < 0.34) return 2;
+    return 1;
+  }
+  if (roll < 0.06) return 3;
+  if (roll < 0.22) return 2;
+  return 1;
 }
 
 inventoryRouter.get('/catalog/emoji-pack/:id', (req, res) => {
@@ -208,6 +228,7 @@ inventoryRouter.get('/me/grouped', authRequired, async (req, res, next) => {
       [req.user.id]
     );
     const ownedEmojiByPack = new Map();   // packId -> array of {emojiId, qty, obtained}
+    const ownedEmojiPackIds = new Set();
     const ownedSkins = [];
     const ownedBadges = [];
     const ownedFrames = [];
@@ -216,6 +237,8 @@ inventoryRouter.get('/me/grouped', authRequired, async (req, res, next) => {
         const [packId, emojiId] = String(row.item_id).split(':');
         if (!ownedEmojiByPack.has(packId)) ownedEmojiByPack.set(packId, []);
         ownedEmojiByPack.get(packId).push({ emojiId, qty: row.quantity, obtained: row.obtained_at });
+      } else if (row.item_type === 'emoji_pack') {
+        ownedEmojiPackIds.add(String(row.item_id));
       } else if (row.item_type === 'card_skin') {
         ownedSkins.push({ id: row.item_id, quantity: Number(row.quantity || 0), obtained: row.obtained_at });
       } else if (row.item_type === 'badge') {
@@ -227,6 +250,12 @@ inventoryRouter.get('/me/grouped', authRequired, async (req, res, next) => {
 
     const emojiSections = EMOJI_PACKS.map((pack, i) => {
       const owned = ownedEmojiByPack.get(pack.id) || [];
+      if (ownedEmojiPackIds.has(pack.id)) {
+        const have = new Set(owned.map((item) => String(item.emojiId)));
+        for (const emoji of (pack.emoji || [])) {
+          if (!have.has(String(emoji.id))) owned.push({ emojiId: emoji.id, qty: 1, obtained: null });
+        }
+      }
       if (!owned.length) return null;
       return {
         packId: pack.id,
@@ -234,6 +263,8 @@ inventoryRouter.get('/me/grouped', authRequired, async (req, res, next) => {
         rarity: pack.rarity,
         premium: !!pack.premium,
         icon: PACK_ICONS[i] || '😀',
+        preview: Array.isArray(pack.preview) ? pack.preview : [],
+        emoji: Array.isArray(pack.emoji) ? pack.emoji : [],
         totalInPack: pack.emoji?.length || 30,
         owned,
       };
@@ -250,18 +281,40 @@ inventoryRouter.get('/me/grouped', authRequired, async (req, res, next) => {
         rarity: pack.rarity,
         premium: !!pack.premium,
         icon: pack.icon || ':)',
+        preview: Array.isArray(pack.preview) ? pack.preview : [],
+        emoji: Array.isArray(pack.emoji) ? pack.emoji : [],
         totalInPack: pack.emoji?.length || owned.length,
         owned,
+        adminCreated: !!pack.adminCreated,
+      });
+    }
+    for (const packId of ownedEmojiPackIds) {
+      if (staticPackIds.has(packId) || ownedEmojiByPack.has(packId)) continue;
+      const pack = adminEmojiById.get(packId) || { id: packId, name: packId, rarity: 'rare', premium: false, icon: ':)' };
+      const emoji = Array.isArray(pack.emoji) && pack.emoji.length
+        ? pack.emoji
+        : [{ id: 'main', value: pack.icon || ':)', label: pack.name || packId }];
+      emojiSections.push({
+        packId,
+        name: pack.name,
+        rarity: pack.rarity,
+        premium: !!pack.premium,
+        icon: pack.icon || ':)',
+        preview: Array.isArray(pack.preview) ? pack.preview : [],
+        emoji,
+        totalInPack: emoji.length,
+        owned: emoji.map((item) => ({ emojiId: item.id, qty: 1, obtained: null })),
         adminCreated: !!pack.adminCreated,
       });
     }
 
     const adminSkinRows = await getEnabledAdminItems('card_skin');
     const adminSkinMap = new Map(adminSkinRows.map((row) => [row.id, adminCardSkin(row, priceGoldFromDollars)]));
-    const skins = ownedSkins.map((o) => {
+    const skins = await Promise.all(ownedSkins.map(async (o) => {
       const meta = SKIN_BY_ID[o.id] || adminSkinMap.get(o.id);
-      return meta ? { ...meta, quantity: o.quantity, obtained: o.obtained } : { id: o.id, name: o.id, quantity: o.quantity, obtained: o.obtained };
-    });
+      const giftable = await cardSkinGiftableCopies(req.user.id, o.id, o.quantity);
+      return meta ? { ...meta, quantity: o.quantity, giftable, obtained: o.obtained } : { id: o.id, name: o.id, quantity: o.quantity, giftable: 0, obtained: o.obtained };
+    }));
 
     // Badge metadata is computed from the user record plus the monthly_badges table.
     // Older production databases do not have a users.monthly_badges column; monthly

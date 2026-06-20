@@ -59,6 +59,10 @@ export function createGame({
     players: players.map((p, i) => ({
       id: p.id,
       username: p.username,
+      nickname: p.nickname || null,
+      avatar_url: p.avatar_url || null,
+      selected_avatar_frame: p.selected_avatar_frame || null,
+      country_code: p.country_code || null,
       isBot: !!p.isBot,
       botLevel: p.botLevel || null,
       hand: hands[i],
@@ -140,7 +144,7 @@ export function transferAttack(state, playerId, cardArg) {
 function tableRanks(state) {
   const set = new Set();
   for (const t of state.table) {
-    if (t.attack) set.add(t.attack.rank);
+    if (t.attack) set.add(t.claimedRank || t.attack.rank);
     if (t.defense) set.add(t.defense.rank);
   }
   return set;
@@ -216,10 +220,15 @@ export function playAttack(state, playerId, cardArg, options = {}) {
   const handIdx = findCardInHand(player, card);
   if (handIdx === -1) return { ok: false, error: 'card not in hand' };
 
-  // First card of a round: any card. Subsequent: must match a rank already on the table.
+  const attackRank = options.bluff && state.bluffEnabled ? String(options.claimedRank || '').toUpperCase() : card.rank;
+  if (options.bluff && state.bluffEnabled && !RANK_VALUE[attackRank]) {
+    return { ok: false, error: 'invalid claimed rank' };
+  }
+
+  // First card of a round: any card/claim. Subsequent attacks must match a visible or claimed rank.
   if (state.table.length > 0) {
     const ranks = tableRanks(state);
-    if (!ranks.has(card.rank)) return { ok: false, error: 'rank not on table' };
+    if (!ranks.has(attackRank)) return { ok: false, error: 'rank not on table' };
   }
 
   // Cap attack cards
@@ -229,12 +238,11 @@ export function playAttack(state, playerId, cardArg, options = {}) {
 
   // Bluff (face-down) play — optional
   if (options.bluff && state.bluffEnabled) {
-    if (!options.claimedRank) return { ok: false, error: 'bluff requires claimedRank' };
     state.table.push({
       attack: card,
       defense: null,
       faceDown: true,
-      claimedRank: options.claimedRank,
+      claimedRank: attackRank,
       bluffer: player.id,
     });
     player.bluffsMade += 1;
@@ -295,6 +303,7 @@ export function playDefense(state, playerId, cardArg) {
       return endRound(state, { defenderTook: false });
     }
     state.attackerIdx = nextAttacker;
+    state.pendingDoneFromAttackers.clear();
     state.phase = 'attacking';
   }
   return { ok: true };
@@ -455,6 +464,9 @@ function endRound(state, { defenderTook }) {
     state.attackerIdx = state.defenderIdx;
     state.defenderIdx = nextAlive(state, state.attackerIdx, 1);
   }
+  if (state.attackerIdx === state.defenderIdx) {
+    state.defenderIdx = nextAlive(state, state.attackerIdx, 1);
+  }
   state.phase = 'attacking';
   return { ok: true, ended: false };
 }
@@ -522,9 +534,13 @@ export function viewFor(state, viewerId) {
     players: state.players.map((p) => ({
       id: p.id,
       username: p.username,
+      nickname: p.nickname || null,
+      avatar_url: p.avatar_url || null,
+      selected_avatar_frame: p.selected_avatar_frame || null,
       // We deliberately don't reveal bot identity to clients (TOR §3 says
       // bots must be indistinguishable). The bot flag stays at the room
       // layer only; the game snapshot reports every player as a normal one.
+      country_code: p.country_code || null,
       isBot: false,
       handSize: p.hand.length,
       hand: p.id === viewerId ? p.hand : undefined,

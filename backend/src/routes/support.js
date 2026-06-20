@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { query, withTransaction } from '../db.js';
 import { authRequired, adminRequired, hasAdminPermission } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
+import { logger } from '../logger.js';
+import { sendTelegramMessage, verifyTelegramWebAppInitData } from '../services/telegramBot.js';
 
 export const supportRouter = Router();
 
@@ -45,6 +47,58 @@ function intParam(value, fallback, min = 0, max = 100) {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+function sanitizeSupportContext(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const telegram = source.telegram && typeof source.telegram === 'object' ? source.telegram : null;
+  return {
+    route: cleanText(source.route, 160),
+    url: cleanText(source.url, 520),
+    userAgent: cleanText(source.userAgent, 260),
+    width: intParam(source.width, 0, 0, 5000),
+    height: intParam(source.height, 0, 0, 5000),
+    telegram: telegram ? {
+      enabled: telegram.enabled === true,
+      platform: cleanText(telegram.platform, 32),
+      version: cleanText(telegram.version, 32),
+      hasInitData: !!String(telegram.initData || '').trim(),
+    } : null,
+  };
+}
+
+function verifiedTelegramSupportContext(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const initData = source.telegram?.initData;
+  const verified = verifyTelegramWebAppInitData(initData);
+  const user = verified?.user && typeof verified.user === 'object' ? verified.user : null;
+  const chatId = String(user?.id || '').trim();
+  if (!/^\d{4,20}$/.test(chatId)) return null;
+  return {
+    chatId,
+    telegramId: chatId,
+    username: cleanText(user.username, 64) || null,
+    firstName: cleanText(user.first_name, 80) || null,
+    lastName: cleanText(user.last_name, 80) || null,
+    authDate: verified.authDate || null,
+  };
+}
+
+async function notifyTelegramSupportReply(row, body) {
+  const chatId = String(row?.metadata?.telegram?.chatId || '').trim();
+  if (!/^\d{4,20}$/.test(chatId)) return false;
+  const subject = cleanText(row.subject, 100);
+  const reply = cleanBody(body).slice(0, 900);
+  const lines = [
+    'Durak Imperia support javobi',
+    '',
+    subject ? `Ticket: ${subject}` : null,
+    reply,
+    '',
+    "To'liq suhbatni o'yin ichidagi Yordam bo'limida ko'rishingiz mumkin.",
+  ].filter(Boolean);
+  await sendTelegramMessage(chatId, lines.join('\n'));
+  return true;
 }
 
 function validOr(value, allowed, fallback) {
@@ -220,7 +274,9 @@ supportRouter.post('/tickets', asyncRoute(async (req, res) => {
   const category = validOr(req.body?.category, CATEGORIES, 'game');
   const subject = normalizeSubject(req.body?.subject, body, category);
   const priority = validOr(req.body?.priority, PRIORITIES, 'normal');
-  const context = typeof req.body?.context === 'object' && req.body.context ? req.body.context : {};
+  const rawContext = typeof req.body?.context === 'object' && req.body.context ? req.body.context : {};
+  const context = sanitizeSupportContext(rawContext);
+  const telegram = verifiedTelegramSupportContext(rawContext);
   if (body.length < 3 && !attachment) throw new HttpError(400, 'message required');
   const storedBody = body || 'Rasm yuborildi';
 
@@ -232,6 +288,7 @@ supportRouter.post('/tickets', asyncRoute(async (req, res) => {
        RETURNING *`,
       [req.user.id, subject, category, priority, JSON.stringify({
         context,
+        telegram,
         createdFrom: 'web-client',
         userAgent: req.headers['user-agent'] || '',
         ip: req.ip,
@@ -403,6 +460,11 @@ supportRouter.post('/admin/tickets/:id/messages', asyncRoute(async (req, res) =>
   });
 
   const full = await getTicketForStaff(req.params.id);
+  if (!internal) {
+    notifyTelegramSupportReply(full, storedBody).catch((err) => {
+      logger.warn('[support] telegram reply notification skipped:', err.message);
+    });
+  }
   res.json({ ticket: ticket(full), messages: await listMessages(req.params.id, { staff: true }) });
 }));
 

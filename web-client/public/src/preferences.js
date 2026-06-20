@@ -1,6 +1,6 @@
 export const PREF_DEFAULTS = {
   pref_dark_mode: true,
-  pref_sound: true,
+  pref_sound: false,
   pref_music: false,
   pref_vibration: true,
   pref_language: 'uz',

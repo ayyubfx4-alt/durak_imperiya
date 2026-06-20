@@ -1,5 +1,6 @@
 import { verifyToken } from '../util/jwt.js';
 import { query } from '../db.js';
+import { updateUserGeo } from '../services/geoip.js';
 
 /**
  * TOR §14 — time-limited bans expire automatically. When a banned user
@@ -26,7 +27,7 @@ export async function authRequired(req, res, next) {
      SELECT id, username, nickname, email, coins, gold_coins, games_played,
             is_admin, admin_role, is_banned, banned_until, banned_reason,
             is_muted, muted_until, muted_reason, premium_until,
-            last_ip, device_id
+            last_ip, device_id, country_code
        FROM users WHERE id = $1`,
     [payload.uid]
   );
@@ -41,6 +42,14 @@ export async function authRequired(req, res, next) {
     });
   }
   req.user = r.rows[0];
+
+  // Fire-and-forget: fonda IP va davlat kodini yangilash.
+  // Foydalanuvchini kutishga majburlamaymiz — xato bo'lsa jim o'tadi.
+  const currentIp = req.ip || req.socket?.remoteAddress || null;
+  if (currentIp && currentIp !== r.rows[0].last_ip) {
+    updateUserGeo(r.rows[0].id, currentIp).catch(() => {});
+  }
+
   next();
 }
 

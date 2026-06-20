@@ -65,7 +65,7 @@ export default function Antibot() {
   }
 
   return (
-    <div className="p-6 text-white max-w-5xl mx-auto">
+    <div className="mx-auto max-w-5xl space-y-4 p-3 text-white sm:p-6">
       <h1 className="text-2xl font-bold mb-1">🤖 Antibot Panel</h1>
       <p className="text-gray-400 text-sm mb-5">
         Tizim botlari (is_bot=TRUE) bu ro'yxatda ko'rinmaydi.
@@ -78,7 +78,7 @@ export default function Antibot() {
       )}
 
       {/* Filter tabs */}
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="flex flex-wrap gap-2">
         {['all', ...CATEGORIES].map(cat => (
           <button
             key={cat}
@@ -92,7 +92,7 @@ export default function Antibot() {
             {cat === 'all' ? '📋 Barchasi' : CAT_LABEL[cat]}
           </button>
         ))}
-        <div className="ml-auto flex gap-2">
+        <div className="flex w-full flex-wrap gap-2 lg:ml-auto lg:w-auto">
           {CATEGORIES.map(cat => (
             <button
               key={cat}
@@ -106,7 +106,7 @@ export default function Antibot() {
       </div>
 
       {/* Action bar */}
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex flex-wrap items-center gap-3">
         <input type="checkbox" checked={selected.size === list.length && list.length > 0}
           onChange={selectAll} className="w-4 h-4 accent-yellow-400" />
         <span className="text-sm text-gray-400">{selected.size} ta tanlangan</span>
@@ -124,8 +124,9 @@ export default function Antibot() {
       ) : list.length === 0 ? (
         <div className="text-center py-12 text-gray-600">Hech kim topilmadi</div>
       ) : (
-        <div className="overflow-auto rounded-lg border border-gray-800">
-          <table className="w-full text-sm">
+        <div className="overflow-hidden rounded-lg border border-gray-800">
+          <div className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[860px] text-sm">
             <thead className="bg-gray-900 text-gray-400 text-xs uppercase">
               <tr>
                 <th className="p-3 w-8"></th>
@@ -170,6 +171,41 @@ export default function Antibot() {
               ))}
             </tbody>
           </table>
+          </div>
+          <div className="md:hidden">
+            {list.map((u) => (
+              <article
+                key={u.user_id}
+                className={`border-b border-gray-800 p-3 text-sm last:border-b-0 ${selected.has(u.user_id) ? 'bg-yellow-950' : ''}`}
+                onClick={() => toggleSelect(u.user_id)}
+              >
+                <div className="mb-3 flex items-start gap-3">
+                  <input type="checkbox" checked={selected.has(u.user_id)}
+                    onChange={() => {}} className="mt-1 h-4 w-4 flex-shrink-0 accent-yellow-400 pointer-events-none" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold text-white">{u.username || u.user_id}</div>
+                    <div className="truncate text-xs text-gray-400">{u.email || '-'}</div>
+                  </div>
+                  <span className={`font-bold ${u.score >= 90 ? 'text-red-400' : u.score >= 70 ? 'text-yellow-400' : 'text-blue-400'}`}>
+                    {u.score}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  <div className={`text-sm font-bold ${CAT_COLOR[u.category] || 'text-gray-400'}`}>
+                    {CAT_LABEL[u.category] || u.category}
+                  </div>
+                  <div className="break-words text-xs text-gray-400">
+                    {Object.entries(u.details || {}).map(([k, v]) =>
+                      <span key={k} className="mr-2">{k}: {v?.pts ?? JSON.stringify(v)}</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {u.last_updated ? new Date(u.last_updated).toLocaleString() : '-'}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-﻿import { h } from '../ui.js';
+import { h } from '../ui.js';
 import { api, API_BASE, setToken } from '../api.js';
 import { navigate } from '../router.js';
 import { state, toast } from '../state.js';
@@ -22,6 +22,7 @@ const FLAG_LOCALES = [
 const LOGIN_COPY = {
   uz: {
     google: 'GOOGLE BILAN KIRISH',
+    telegram: 'TELEGRAM BILAN KIRISH',
     account: 'LOGIN / ROYXATDAN OTISH',
     or: 'yoki',
     loading: 'YUKLANMOQDA...',
@@ -81,6 +82,7 @@ const LOGIN_COPY = {
   },
   ru: {
     google: 'VOYTI CHEREZ GOOGLE',
+    telegram: 'VOYTI CHEREZ TELEGRAM',
     account: 'LOGIN / REGISTRATSIYA',
     or: 'ili',
     loading: 'ZAGRUZKA...',
@@ -140,6 +142,7 @@ const LOGIN_COPY = {
   },
   en: {
     google: 'SIGN IN WITH GOOGLE',
+    telegram: 'SIGN IN WITH TELEGRAM',
     account: 'LOGIN / REGISTER',
     or: 'or',
     loading: 'LOADING...',
@@ -260,10 +263,16 @@ export function renderLogin(root) {
   let authLoading = false;
 
   const errorEl = h('div', { class: 'royal-login-error' });
-  const googleBtn = h('button', { class: 'royal-login-btn google' }, [
-    googleMark(),
-    h('span', {}, [tr.google]),
-  ]);
+  const isTelegram = !!(window.Telegram?.WebApp?.initData);
+  const googleBtn = isTelegram
+    ? h('button', { class: 'royal-login-btn telegram', style: 'background: linear-gradient(135deg, #24A1DE, #179CDE); color: white;' }, [
+        telegramMark(),
+        h('span', {}, [tr.telegram]),
+      ])
+    : h('button', { class: 'royal-login-btn google' }, [
+        googleMark(),
+        h('span', {}, [tr.google]),
+      ]);
   const accountBtn = h('button', { class: 'royal-login-btn nickname' }, [
     h('span', { class: 'royal-login-btn-icon' }, ['@']),
     h('span', {}, [tr.account]),
@@ -319,7 +328,7 @@ export function renderLogin(root) {
   });
   screen.querySelector('.royal-login-copy').textContent = tr.copyright;
 
-  if (sessionStorage.getItem('durak.google.redirect.pending') === '1') {
+  if (!isTelegram && sessionStorage.getItem('durak.google.redirect.pending') === '1') {
     sessionStorage.removeItem('durak.google.redirect.pending');
     ensureFirebaseReady(tr).then((firebase) => firebase.auth().getRedirectResult())
       .then((result) => finishGoogleSignIn(result, tr))
@@ -332,32 +341,51 @@ export function renderLogin(root) {
     googleBtn.disabled = true;
     errorEl.textContent = '';
     googleBtn.querySelector('span:last-child').textContent = tr.loading;
-    let provider = null;
-    try {
-      const firebase = await ensureFirebaseReady(tr);
-      provider = new firebase.auth.GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const result = await firebase.auth().signInWithPopup(provider);
-      await finishGoogleSignIn(result, tr);
-    } catch (e) {
-      if ((e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') && provider) {
-        try {
-          const firebase = await ensureFirebaseReady(tr);
-          sessionStorage.setItem('durak.google.redirect.pending', '1');
-          await firebase.auth().signInWithRedirect(provider);
-          return;
-        } catch (redirectErr) {
-          e = redirectErr;
+
+    if (isTelegram) {
+      try {
+        const initData = window.Telegram?.WebApp?.initData;
+        const res = await api.telegram(initData);
+        setToken(res.token);
+        state.user = res.user;
+        await api.setLocale(getLocale()).catch(() => {});
+        toast(tr.welcome.replace('{name}', res.user?.nickname || res.user?.username || 'Telegram'), 'success');
+        const needsNickname = !!res.needsNickname || !res.user?.nickname || res.user?.nickname_set === false;
+        navigate(needsNickname ? 'nickname' : 'home');
+      } catch (e) {
+        errorEl.textContent = e.message || 'Telegram auth failed';
+        googleBtn.disabled = false;
+        googleBtn.querySelector('span:last-child').textContent = tr.telegram;
+        googleLoading = false;
+      }
+    } else {
+      let provider = null;
+      try {
+        const firebase = await ensureFirebaseReady(tr);
+        provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        const result = await firebase.auth().signInWithPopup(provider);
+        await finishGoogleSignIn(result, tr);
+      } catch (e) {
+        if ((e?.code === 'auth/popup-blocked' || e?.code === 'auth/operation-not-supported-in-this-environment') && provider) {
+          try {
+            const firebase = await ensureFirebaseReady(tr);
+            sessionStorage.setItem('durak.google.redirect.pending', '1');
+            await firebase.auth().signInWithRedirect(provider);
+            return;
+          } catch (redirectErr) {
+            e = redirectErr;
+          }
         }
+        if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') {
+          errorEl.textContent = '';
+        } else {
+          errorEl.textContent = googleErrorMessage(e, tr);
+        }
+        googleBtn.disabled = false;
+        googleBtn.querySelector('span:last-child').textContent = tr.google;
+        googleLoading = false;
       }
-      if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') {
-        errorEl.textContent = '';
-      } else {
-        errorEl.textContent = googleErrorMessage(e, tr);
-      }
-      googleBtn.disabled = false;
-      googleBtn.querySelector('span:last-child').textContent = tr.google;
-      googleLoading = false;
     }
   });
 
@@ -406,6 +434,14 @@ function googleMark() {
     <path fill="#34A853" d="M6.3 14.7l7 5.1C15.1 14.6 19.2 11 24 11c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 16.1 2 9.2 6.5 6.3 14.7z"/>
     <path fill="#FBBC05" d="M24 46c6 0 11.1-2 14.8-5.5l-7-5.7C29.8 36.2 27.2 37 24 37c-6 0-11.1-4-12.9-9.5l-7.1 5.5C7.4 40.7 15.1 46 24 46z"/>
     <path fill="#EA4335" d="M11.1 27.5A13.5 13.5 0 0 1 11 24c0-1.2.2-2.4.5-3.5l-7.2-5.8A22 22 0 0 0 2 24c0 3.2.7 6.2 2 9l7.1-5.5z"/>
+  `;
+  return svg;
+}
+
+function telegramMark() {
+  const svg = h('svg', { class: 'royal-telegram-mark', viewBox: '0 0 24 24', 'aria-hidden': 'true', style: 'width: 20px; height: 20px; fill: currentColor; margin-right: 8px;' });
+  svg.innerHTML = `
+    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.11.02-1.89 1.2-5.34 3.53-.51.35-.97.52-1.37.51-.44-.01-1.29-.25-1.92-.45-.77-.25-1.38-.39-1.33-.82.03-.22.33-.45.91-.69 3.56-1.55 5.94-2.57 7.14-3.07 3.4-1.42 4.1-.17 4.1.42.01.12.01.25-.01.37z"/>
   `;
   return svg;
 }

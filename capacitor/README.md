@@ -61,6 +61,7 @@ Production verification needs:
 
 ## Build
 
+### Android Build
 ```powershell
 npm run android:tools
 npm run android:build
@@ -74,6 +75,10 @@ Store-ready builds require a real AdMob Android app id. This command intentional
 $env:PUBLIC_APP_URL="https://your-production-domain.example"
 $env:ADMOB_ANDROID_APP_ID="ca-app-pub-REAL~APP_ID"
 $env:ADMOB_REWARDED_ANDROID_ID="ca-app-pub-REAL/REWARDED_ID"
+$env:ANDROID_KEYSTORE_BASE64="BASE64_OF_RELEASE_KEYSTORE"
+$env:ANDROID_KEYSTORE_PASSWORD="CHANGE_ME"
+$env:ANDROID_KEY_ALIAS="durak"
+$env:ANDROID_KEY_PASSWORD="CHANGE_ME"
 npm run android:build:store
 ```
 
@@ -83,7 +88,19 @@ Final release also requires a backed-up Android release keystore and:
 ANDROID_RELEASE_KEYSTORE_READY=1
 ```
 
-Before publishing, backend readiness must return `ok=true`:
+### iOS Build (macOS with Xcode Required)
+To prepare a release for the iOS platform, verify you are running on macOS, then execute the release script:
+
+```bash
+export PUBLIC_APP_URL="https://your-production-domain.example"
+export ADMOB_IOS_APP_ID="ca-app-pub-REAL~APP_ID"
+export ADMOB_REWARDED_IOS_ID="ca-app-pub-REAL/REWARDED_ID"
+./scripts/build-ios-release.sh
+```
+
+This will prepare the Capacitor web configuration, inject variables, run `cap sync ios`, and open the Xcode workspace where you can run the final Archive command.
+
+Before publishing, backend readiness must return `ok=true` for both active platforms:
 
 ```bash
 curl https://YOUR_DOMAIN/api/production/readiness

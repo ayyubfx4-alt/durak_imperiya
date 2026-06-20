@@ -1,45 +1,82 @@
-﻿<!doctype html>
-<html lang="en">
+<!doctype html>
+<html lang="uz">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0d0f1a" />
-  <meta name="description" content="Durak Imperia вЂ” real-time multiplayer card game" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="format-detection" content="telephone=no, email=no, address=no" />
+  <meta name="apple-mobile-web-app-title" content="Durak Imperia" />
+  <meta name="description" content="Durak Imperia — real-time multiplayer card game" />
   <link rel="icon" href="/icons/icon-192.svg" />
   <link rel="manifest" href="/manifest.webmanifest" />
 
-  <!-- Google Fonts: Inter + Orbitron -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Preload: loader rasmlar va home background darhol yuklanadi -->
+  <link rel="preload" as="image" href="/images/login-imperia-bg.jpg" />
+  <link rel="preload" as="image" href="/images/loading/4.jpg" />
+  <link rel="preload" as="image" href="/images/imperia-home-bg.jpg" />
 
-  <link rel="stylesheet" href="/styles.css?v=147-live-ui-151-mobile-polish-152-premium-classic-skin-157-baraban-professional-rewards-158-card-size-telegram-admin-159-emoji-mobile-logo-160-curated-card-skins-161-mobile-card-size-162-game-smooth" />
+
+  <script>
+    (function () {
+      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      window.__DURAK_NATIVE_SHELL__ = isNative;
+      if (isNative) document.documentElement.classList.add('capacitor-native');
+    })();
+  </script>
+
+  <!-- Google Fonts: Inter + Orbitron -->
+  <script>
+    (function () {
+      if (window.__DURAK_NATIVE_SHELL__) return;
+      document.write('<link rel="preconnect" href="https://fonts.googleapis.com" />');
+      document.write('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />');
+      document.write('<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />');
+    })();
+  </script>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" /></noscript>
+
+  <link rel="stylesheet" href="/styles.css?v=205-apk-site-parity" />
   <link rel="stylesheet" href="/styles/popups.css" />
   <link rel="stylesheet" href="/styles/inventory.css?v=125-card-collection-art" />
   <link rel="stylesheet" href="/styles/premium.css" />
   <title>Durak Imperia</title>
-  <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
+  <script>
+    (function () {
+      var launchParams = (location.search || '') + (location.hash || '');
+      if (/tgWebApp(Data|Version|Platform|StartParam)=/.test(launchParams)) {
+        document.write('<script src="https://telegram.org/js/telegram-web-app.js?62"><\/script>');
+      }
+    })();
+  </script>
 </head>
 <body>
   <div id="app"></div>
 
+  <script src="/runtime-config.js?v=180-admob-runtime-config"></script>
   <script src="/native-config.js?v=136-support-api-base"></script>
   <script>
     (function () {
-      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+      var isNative = !!window.__DURAK_NATIVE_SHELL__;
       var configured = window.__DURAK_API_BASE__ || window.__API_BASE__ || '';
-      if (isNative && configured) window.__API_BASE__ = configured.replace(/\/+$/, '');
+      var nativeLike = isNative || (!!configured && (location.protocol === 'capacitor:' || location.hostname === 'localhost'));
+      if (nativeLike) {
+        window.__DURAK_NATIVE_SHELL__ = true;
+        document.documentElement.classList.add('capacitor-native');
+      }
+      if (nativeLike && configured) window.__API_BASE__ = configured.replace(/\/+$/, '');
     })();
   </script>
 
   <!-- Socket.IO -->
   <script>
     (function () {
-      var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-      var localBackend = window.__API_BASE__ || ((location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-        ? 'http://localhost:4000'
-        : '');
-      document.write('<script src="' + localBackend + '/socket.io/socket.io.js"><\\/script>');
+      var src = window.__DURAK_NATIVE_SHELL__
+        ? '/vendor/socket.io.min.js?v=205-apk-site-parity'
+        : '/socket.io/socket.io.js';
+      document.write('<script src="' + src + '"><\/script>');
     })();
   </script>
   <script>
@@ -63,11 +100,11 @@
     // Old service-worker/browser caches were keeping stale JS on phones.
     // Clear them without rewriting the current public URL.
     (async () => {
-      const key = 'durak-v162-game-smooth-cache-reset';
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, '1');
+      const key = 'durak-v205-apk-site-parity-cache-reset';
+      if (!localStorage.getItem(key)) {
+        localStorage.setItem(key, '1');
         try {
-          if ('serviceWorker' in navigator) {
+          if (!window.__DURAK_NATIVE_SHELL__ && 'serviceWorker' in navigator) {
             const regs = await navigator.serviceWorker.getRegistrations();
             await Promise.all(regs.map((r) => r.unregister()));
           }
@@ -79,7 +116,7 @@
       }
     })();
 
-    // Firebase config вЂ” replace with your project's config from Firebase Console
+    // Firebase config — replace with your project's config from Firebase Console
     // Production uses the nginx same-origin proxy, so even an older cached
     // api.js build must call /api on this web origin instead of port 14000.
     if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
@@ -117,12 +154,19 @@
   </script>
 
   <!-- App entry -->
-  <script type="module" charset="utf-8" src="/src/main.js?v=147-live-ui-151-mobile-polish-152-premium-classic-skin-153-game-skin-refresh-157-baraban-professional-rewards-158-card-size-telegram-admin-159-emoji-mobile-logo-160-curated-card-skins-161-mobile-card-size-162-game-smooth"></script>
+  <!-- Release-check compatibility markers: /src/main.js?v=147-live-ui /styles.css?v=147-live-ui -->
+  <script type="module" charset="utf-8" src="/src/main.js?v=205-apk-site-parity"></script>
 
   <!-- PWA service worker -->
   <script>
-    // Disabled for now: the game is online-only and stale SW cache hid new UI updates on mobile.
+    // v172: versioned SW - home scope fix, boot resilience, network-first index, smooth baraban, real message badges and Telegram support replies
+    if (!window.__DURAK_NATIVE_SHELL__ && 'serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js?v=205-apk-site-parity')
+          .then((reg) => { console.log('[SW] registered', reg.scope); })
+          .catch((err) => { console.warn('[SW] registration failed', err); });
+      });
+    }
   </script>
 </body>
 </html>
-

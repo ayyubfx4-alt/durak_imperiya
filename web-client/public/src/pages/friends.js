@@ -1,15 +1,17 @@
-// Friends — qidirish, taklif yuborish, sovg'a, olib tashlash
+﻿// Friends — qidirish, taklif yuborish, sovg'a, olib tashlash
 // MIJOZ KRITIK FIX: "do'st taklif qiladigan joyi ishlamayapti" — to'liq qayta yozildi.
 import { h } from '../ui.js';
 import { api } from '../api.js';
 import { state, toast } from '../state.js';
 import { navigate } from '../router.js';
 import { avatarColorFor, avatarLetter } from '../cards.js';
-import { sfx } from '../sfx.js?v=111-encoding-fix';
+import { sfx } from '../sfx.js?v=164-i18n-audio';
+import { connectSocket } from '../socket.js';
 
-export async function renderFriends(root) {
+export async function renderFriends(root, params = {}) {
   root.innerHTML = '';
   const wrap = h('div', { class: 'screen bg-lobby' });
+  const focusMessages = params?.tab === 'messages';
 
   // Topbar
   wrap.appendChild(h('div', { class: 'lobby-topbar' }, [
@@ -28,20 +30,6 @@ export async function renderFriends(root) {
 
   let me = state.user || {};
   try { me = await api.me(); state.user = me; } catch (_) {}
-
-  if (Number(me.games_played || 0) < 5) {
-    const left = Math.max(0, 5 - Number(me.games_played || 0));
-    scroll.appendChild(h('div', { class: 'section-card' }, [
-      h('h3', {}, ["Do'stlar hali yopiq"]),
-      h('p', { class: 'muted', style: 'line-height:1.55' }, [
-        `Do'stlar bo'limi 5 ta o'yindan keyin ochiladi. Yana ${left} ta o'yin o'ynang, keyin qidirish, taklif yuborish va sovg'a berish ishlaydi.`,
-      ]),
-      h('button', { class: 'btn-big green', onclick: () => navigate('lobby') }, ["O'ynash"]),
-    ]));
-    wrap.appendChild(scroll);
-    root.appendChild(wrap);
-    return;
-  }
 
   const refCode = me.referral_code || '—';
   const refUrl = `${location.origin}/?ref=${refCode}`;
@@ -154,7 +142,7 @@ export async function renderFriends(root) {
             h('div', { style: 'display:flex;align-items:center;gap:12px;flex:1;min-width:0' }, [
               h('div', { class: `avatar sm color-${avatarColorFor(u.id)}` }, [avatarLetter(u.username)]),
               h('div', { style: 'min-width:0' }, [
-                h('div', { style: 'font-weight:800;color:var(--rc-text-bright)' }, [u.nickname ? `@${u.nickname}` : u.username]),
+                friendNameLine(u, false, u.nickname ? `@${u.nickname}` : u.username),
                 h('div', { class: 'muted', style: 'font-size:11px' }, [`${u.rank_wins || 0} g'alaba`]),
               ]),
             ]),
@@ -183,6 +171,9 @@ export async function renderFriends(root) {
 
   // ═══ FRIENDS LIST ═══
   const list = await api.friends().catch(() => []);
+  if (focusMessages) {
+    scroll.appendChild(renderFriendMessagesCard(root, list));
+  }
   const friendsCard = h('div', { class: 'section-card' });
   friendsCard.appendChild(h('h3', { style: 'display:flex;align-items:center;justify-content:space-between' }, [
     h('span', {}, [`Do\'stlar`]),
@@ -200,9 +191,7 @@ export async function renderFriends(root) {
       h('div', { style: 'display:flex;align-items:center;gap:12px;flex:1;min-width:0' }, [
         h('div', { class: `avatar sm color-${avatarColorFor(f.id)}` }, [avatarLetter(f.username)]),
         h('div', { style: 'min-width:0' }, [
-          h('div', { style: 'font-weight:800;color:var(--rc-text-bright)' }, [
-            `@${f.username}${isPending ? ' ⏳' : ''}`,
-          ]),
+          friendNameLine(f, isPending, `@${f.username}`),
           h('div', { class: 'muted', style: 'font-size:11px' },
             [f.online ? '🟢 Onlayn' : '⚪ Oflayn']),
         ]),
@@ -218,16 +207,16 @@ export async function renderFriends(root) {
         }, ['✓ Qabul']) : null,
         !isPending ? h('button', {
           class: 'btn-secondary', style: 'padding:8px 12px;font-size:14px',
-          onclick: async () => {
+          onclick: () => {
             sfx.play('click');
-            const amt = Number(prompt('Necha $ sovg\'a yuborasiz?', '100') || 0);
-            if (amt > 0) {
-              try {
-                await api.giftCoins(f.id, amt);
-                sfx.play('coin');
-                toast(`✓ ${amt}$ sovg'a yuborildi`, 'success');
-              } catch (e) { toast(e.message || 'Xatolik', 'error'); }
-            }
+            openFriendMessageModal(root, f);
+          }
+        }, ['✉']) : null,
+        !isPending ? h('button', {
+          class: 'btn-secondary', style: 'padding:8px 12px;font-size:14px',
+          onclick: () => {
+            sfx.play('click');
+            openFriendGiftModal(root, f);
           }
         }, ['🎁']) : null,
         h('button', {
@@ -247,4 +236,245 @@ export async function renderFriends(root) {
 
   wrap.appendChild(scroll);
   root.appendChild(wrap);
+}
+
+function renderFriendMessagesCard(root, friends = []) {
+  const accepted = friends.filter((f) => f.status !== 'pending');
+  const card = h('div', { class: 'section-card friend-messages-card' });
+  card.appendChild(h('h3', { style: 'display:flex;align-items:center;justify-content:space-between;gap:10px' }, [
+    h('span', {}, ['✉ Xabarlar']),
+    h('span', { class: 'badge gold' }, [String(accepted.length)]),
+  ]));
+  if (!accepted.length) {
+    card.appendChild(h('div', { class: 'muted text-c', style: 'padding:20px 12px' }, [
+      'Xabar yozish uchun avval do‘st qo‘shing',
+    ]));
+    return card;
+  }
+  const list = h('div', { style: 'display:grid;gap:8px' });
+  for (const friend of accepted.slice(0, 20)) {
+    list.appendChild(h('button', {
+      class: 'btn-secondary',
+      style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:11px 12px',
+      onclick: () => openFriendMessageModal(root, friend),
+    }, [
+      h('span', { style: 'display:flex;align-items:center;gap:10px;min-width:0' }, [
+        h('span', { class: `avatar sm color-${avatarColorFor(friend.id)}` }, [avatarLetter(friend.username)]),
+        h('span', { style: 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, [`@${friend.nickname || friend.username}`]),
+      ]),
+      h('b', {}, [friend.online ? 'Online' : 'Yozish']),
+    ]));
+  }
+  card.appendChild(list);
+  return card;
+}
+
+function messageTime(value) {
+  try {
+    return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (_) {
+    return '';
+  }
+}
+
+function openFriendMessageModal(root, friend) {
+  const friendName = `@${friend.nickname || friend.username}`;
+  const list = h('div', {
+    class: 'friend-chat-list',
+    style: 'display:grid;gap:8px;max-height:min(52dvh,420px);overflow:auto;padding:8px;border:1px solid rgba(216,179,95,.25);border-radius:12px;background:rgba(0,0,0,.22)',
+  }, [h('div', { class: 'muted text-c', style: 'padding:14px' }, ['Xabarlar yuklanmoqda...'])]);
+  const input = h('textarea', {
+    placeholder: 'Xabar yozing...',
+    maxlength: '1000',
+    style: 'min-height:74px;width:100%;resize:vertical',
+  });
+  let socket = null;
+
+  const renderMessages = (messages = []) => {
+    list.innerHTML = '';
+    if (!messages.length) {
+      list.appendChild(h('div', { class: 'muted text-c', style: 'padding:14px' }, ['Hali xabar yo‘q']));
+      return;
+    }
+    for (const msg of messages) appendMessage(msg, false);
+    list.scrollTop = list.scrollHeight;
+  };
+
+  const appendMessage = (msg, scroll = true) => {
+    const mine = !!msg.mine || String(msg.senderId) === String(state.user?.id);
+    list.appendChild(h('div', {
+      style: `justify-self:${mine ? 'end' : 'start'};max-width:82%;padding:9px 11px;border-radius:12px;border:1px solid rgba(216,179,95,.28);background:${mine ? 'linear-gradient(180deg,#81520f,#3b2209)' : 'rgba(255,255,255,.06)'};color:#fff3c4`,
+    }, [
+      h('div', { style: 'white-space:pre-wrap;word-break:break-word;font-weight:800' }, [msg.content || '']),
+      h('small', { style: 'display:block;margin-top:4px;color:#d8bd80;text-align:right' }, [messageTime(msg.sentAt)]),
+    ]));
+    if (scroll) list.scrollTop = list.scrollHeight;
+  };
+
+  const load = async () => {
+    try {
+      const messages = await api.friendMessages(friend.id);
+      renderMessages(messages);
+    } catch (e) {
+      list.innerHTML = '';
+      list.appendChild(h('div', { class: 'error', style: 'padding:10px' }, [e.message || 'Xabarlar yuklanmadi']));
+    }
+  };
+
+  const close = () => {
+    try { socket?.off?.('friend:message', onIncoming); } catch (_) {}
+    bg.remove();
+  };
+
+  const onIncoming = (msg) => {
+    if (String(msg.friendId || msg.senderId) !== String(friend.id)) return;
+    appendMessage({ ...msg, mine: false });
+  };
+
+  const send = async () => {
+    const text = String(input.value || '').trim();
+    if (!text) return toast('Xabar yozing', 'info');
+    input.disabled = true;
+    try {
+      const result = await api.sendFriendMessage(friend.id, text);
+      input.value = '';
+      appendMessage(result.message || { content: text, mine: true, sentAt: new Date().toISOString() });
+      sfx.play('click');
+    } catch (e) {
+      toast(e.message || 'Xabar yuborilmadi', 'error');
+    } finally {
+      input.disabled = false;
+      input.focus();
+    }
+  };
+
+  const bg = h('div', { class: 'modal-bg friend-message-modal-bg', onclick: (e) => { if (e.target === bg) close(); } }, [
+    h('div', { class: 'modal friend-message-modal' }, [
+      h('button', { class: 'chat-close-btn', onclick: close }, ['×']),
+      h('h2', {}, ['✉ Xabarlar']),
+      h('p', { class: 'muted' }, [`Do‘st: ${friendName}`]),
+      list,
+      input,
+      h('div', { class: 'row mt-16 gap-12' }, [
+        h('button', { class: 'btn-secondary grow', onclick: close }, ['Yopish']),
+        h('button', { class: 'btn-big green grow', style: 'width:auto;min-height:auto;padding:13px', onclick: send }, ['Yuborish']),
+      ]),
+    ]),
+  ]);
+  document.body.appendChild(bg);
+  setTimeout(() => input.focus(), 80);
+  load();
+  try {
+    socket = connectSocket();
+    socket.on('friend:message', onIncoming);
+  } catch (_) {}
+}
+
+function countryCode(value) {
+  const code = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : '';
+}
+
+function countryFlag(code) {
+  const normalized = countryCode(code);
+  if (!normalized) return null;
+  const srcByCode = {
+    UZ: '/flags/uz.jpg',
+    RU: '/flags/ru.jfif',
+    EN: '/flags/en.avif',
+    GB: '/flags/en.avif',
+    US: '/flags/en.avif',
+  };
+  const src = srcByCode[normalized];
+  if (src) {
+    return h('img', {
+      class: 'friend-country-flag',
+      src,
+      alt: normalized,
+      loading: 'lazy',
+    });
+  }
+  return h('span', { class: 'friend-country-code' }, [normalized]);
+}
+
+function friendNameLine(user, isPending = false, label = '') {
+  return h('div', { class: 'friend-name-line' }, [
+    countryFlag(user?.country_code),
+    h('span', { class: 'friend-name-text' }, [`${label || user?.username || 'Player'}${isPending ? ' ⏳' : ''}`]),
+  ]);
+}
+
+function openFriendGiftModal(root, friend) {
+  const friendName = `@${friend.nickname || friend.username}`;
+  const close = () => bg.remove();
+  const status = h('div', { class: 'muted', style: 'font-size:12px;min-height:18px' }, ['Faqat ortiqcha sticker pack va tasodifiy karta yuboriladi']);
+  const list = h('div', { style: 'display:grid;gap:8px;margin-top:10px' });
+
+  const run = async (label, task) => {
+    try {
+      status.textContent = 'Yuborilmoqda...';
+      await task();
+      sfx.play('coin');
+      toast(`✓ ${friendName} ga ${label} yuborildi`, 'success');
+      close();
+      renderFriends(root);
+    } catch (e) {
+      status.textContent = e.message || "Sovg'a yuborilmadi";
+      toast(e.message || "Sovg'a yuborilmadi", 'error');
+    }
+  };
+
+  list.appendChild(h('button', {
+    class: 'btn-secondary',
+    onclick: async () => {
+      status.textContent = 'Stikerlar yuklanmoqda...';
+      const packs = await api.stickerInventory().catch(() => []);
+      const owned = packs.filter((p) => Number(p.giftable || 0) > 0);
+      if (!owned.length) {
+        status.textContent = 'Sovg‘a qilinadigan ortiqcha sticker pack yo‘q';
+        return toast('Ortiqcha sticker pack yo‘q', 'info');
+      }
+      list.innerHTML = '';
+      for (const pack of owned.slice(0, 10)) {
+        list.appendChild(h('button', {
+          class: 'btn-secondary',
+          onclick: () => run(pack.name || 'Sticker', () => api.giftSticker(friend.id, pack.id, `${pack.name || 'Sticker'} sovg‘a`)),
+        }, [`🎭 ${pack.name || pack.id} x${pack.giftable}`]));
+      }
+      list.appendChild(h('button', { class: 'btn-secondary', onclick: close }, ['Yopish']));
+      status.textContent = 'Qaysi ortiqcha sticker pack yuboriladi?';
+    },
+  }, ['Sticker pack']));
+  list.appendChild(h('button', {
+    class: 'btn-secondary',
+    onclick: async () => {
+      status.textContent = 'Kartalar yuklanmoqda...';
+      const inv = await api.inventoryGrouped().catch(() => null);
+      const skins = (inv?.cardSkins || []).filter((skin) => Number(skin.giftable || 0) > 0);
+      if (!skins.length) {
+        status.textContent = 'Sovg‘a qilinadigan ortiqcha random karta yo‘q';
+        return toast('Ortiqcha random karta yo‘q', 'info');
+      }
+      list.innerHTML = '';
+      for (const skin of skins.slice(0, 10)) {
+        list.appendChild(h('button', {
+          class: 'btn-secondary',
+          onclick: () => run(skin.name || 'Karta', () => api.giftSkin(friend.id, skin.id, `${skin.name || 'Karta'} sovg‘a`)),
+        }, [`🃏 ${skin.name || skin.id} x${skin.giftable}`]));
+      }
+      list.appendChild(h('button', { class: 'btn-secondary', onclick: close }, ['Yopish']));
+      status.textContent = 'Qaysi ortiqcha random karta yuboriladi?';
+    },
+  }, ['Ortiqcha karta']));
+
+  const bg = h('div', { class: 'modal-bg friend-gift-modal-bg', onclick: (e) => { if (e.target === bg) close(); } }, [
+    h('div', { class: 'modal friend-gift-modal' }, [
+      h('button', { class: 'chat-close-btn', onclick: close }, ['×']),
+      h('h2', {}, ['🎁 Sovg‘a yuborish']),
+      h('p', { class: 'muted' }, [`Qabul qiluvchi: ${friendName}`]),
+      status,
+      list,
+    ]),
+  ]);
+  document.body.appendChild(bg);
 }

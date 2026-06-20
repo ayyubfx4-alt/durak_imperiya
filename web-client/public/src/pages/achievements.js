@@ -10,7 +10,7 @@ const CATEGORY_META = {
   streak: ['🔥', { uz: 'Seriya', ru: 'Серия', en: 'Streak' }],
   wins: ['🏆', { uz: "G'alaba", ru: 'Победы', en: 'Wins' }],
   games: ['🎮', { uz: "O'yinlar", ru: 'Игры', en: 'Games' }],
-  coins: ['🪙', { uz: 'Boylik', ru: 'Монеты', en: 'Wealth' }],
+  coins: ['GC', { uz: 'Boylik', ru: 'Монеты', en: 'Wealth' }],
   friends: ['🤝', { uz: "Do'stlar", ru: 'Друзья', en: 'Friends' }],
   draws: ['⚖', { uz: 'Durang', ru: 'Ничьи', en: 'Draws' }],
   lossStreak: ['🎭', { uz: 'Sabot', ru: 'Стойкость', en: 'Resilience' }],
@@ -151,7 +151,7 @@ function summaryCard({ total, unlocked, percent, stats, copy }) {
       statPill('🏆', copy.wins, stats.wins),
       statPill('🎮', copy.games, stats.games),
       statPill('🔥', copy.streak, stats.streak),
-      statPill('🪙', copy.dollars, stats.coins),
+      statPill('GC', copy.dollars, stats.coins),
     ]),
   ]);
 }

@@ -50,7 +50,8 @@ test('shop catalog items that are for sale have explicit Gold Coin prices', () =
   assert.ok(EMOJI_PACKS.every((pack) => Number(pack.priceGold || 0) > 0));
 
   assert.ok(STICKER_PACKS.length > 20);
-  assert.ok(STICKER_PACKS.every((pack) => Number(pack.priceGold || 0) > 0));
+  assert.ok(STICKER_PACKS.some((pack) => pack.id === 'pack_starter' && pack.freeDefault && pack.forSale === false));
+  assert.ok(STICKER_PACKS.filter((pack) => pack.forSale !== false).every((pack) => Number(pack.priceGold || 0) > 0));
 
   assert.ok(PROFILE_FRAMES.length > 0);
   assert.ok(PROFILE_FRAMES.every((frame) => Number(frame.priceGold || 0) > 0));
