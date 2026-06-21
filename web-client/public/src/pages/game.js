@@ -757,12 +757,45 @@ export async function renderGame(root, params) {
     return h('div', { class: `speech dynamic-ephemeral${looksLikeEmoji ? ' emoji-speech' : ''}` }, [text]);
   }
 
+  // Sticker bubbles are rendered as fixed-position overlays on document.body
+  // so that they are never clipped by any parent overflow:hidden container
+  // (including the mobile .royal-table-screen{overflow:hidden}).
+  function showFloatingStickerBubble(playerId, hostEl, stickerData) {
+    cleanFloatingStickerBubble(playerId);
+    if (!stickerData?.img || !hostEl) return;
+    const rect = hostEl.getBoundingClientRect();
+    const W = 88, H = 88;
+    let left = rect.left + rect.width / 2 - W / 2;
+    let top = rect.top - H - 8;
+    // Clamp so the bubble stays inside the viewport
+    left = Math.max(6, Math.min(window.innerWidth - W - 6, left));
+    top = Math.max(6, top);
+    const el = document.createElement('div');
+    el.className = 'player-sticker-float';
+    el.setAttribute('data-pid', String(playerId));
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    const img = document.createElement('img');
+    img.src = stickerData.img;
+    img.alt = stickerData.senderName || 'sticker';
+    img.loading = 'eager';
+    img.draggable = false;
+    el.appendChild(img);
+    document.body.appendChild(el);
+  }
+  function cleanFloatingStickerBubble(playerId) {
+    const pid = String(playerId);
+    document.querySelectorAll('.player-sticker-float').forEach((el) => {
+      if (el.getAttribute('data-pid') === pid) el.remove();
+    });
+  }
+  function cleanAllFloatingStickerBubbles() {
+    document.querySelectorAll('.player-sticker-float').forEach((el) => el.remove());
+  }
+
   function makeStickerBubble(playerId) {
-    const sticker = stickerByPlayer[playerId];
-    if (!sticker?.img) return null;
-    return h('div', { class: 'sticker-speech dynamic-ephemeral' }, [
-      h('img', { src: sticker.img, alt: sticker.senderName || 'sticker', loading: 'lazy', decoding: 'async', draggable: false }),
-    ]);
+    // Inline sticker bubbles are no longer used; floating bubbles handle display.
+    return null;
   }
 
   function syncEphemeralFor(playerId) {
@@ -772,8 +805,9 @@ export async function renderGame(root, params) {
     if (typingByPlayer[playerId]) host.appendChild(makeTypingBubble());
     if (speechByPlayer[playerId]) host.appendChild(makeSpeechBubble(playerId));
     if (stickerByPlayer[playerId]) {
-      const bubble = makeStickerBubble(playerId);
-      if (bubble) host.appendChild(bubble);
+      showFloatingStickerBubble(playerId, host, stickerByPlayer[playerId]);
+    } else {
+      cleanFloatingStickerBubble(playerId);
     }
   }
 
@@ -2321,10 +2355,7 @@ export async function renderGame(root, params) {
       if (speechByPlayer[p.id]) {
         oppEl.appendChild(makeSpeechBubble(p.id));
       }
-      if (stickerByPlayer[p.id]) {
-        const stickerBubble = makeStickerBubble(p.id);
-        if (stickerBubble) oppEl.appendChild(stickerBubble);
-      }
+      // Sticker for opponents: handled by floating bubbles via syncEphemeralFor
 
       if (isTurn) oppEl.appendChild(h('div', { class: 'turn-glow' }));
 
@@ -2475,10 +2506,7 @@ export async function renderGame(root, params) {
     if (speechByPlayer[me?.id]) {
       myAvatar.appendChild(makeSpeechBubble(me.id));
     }
-    if (stickerByPlayer[me?.id]) {
-      const stickerBubble = makeStickerBubble(me.id);
-      if (stickerBubble) myAvatar.appendChild(stickerBubble);
-    }
+    // Sticker for me: floating bubble, not inline (to avoid overflow:hidden clipping)
     wrap.appendChild(h('div', { class: 'bottom-info-bar' }, [
       h('div', { class: 'me-info' }, [
         myAvatar,
@@ -2690,6 +2718,7 @@ export async function renderGame(root, params) {
     socket.off('player:typing', onPlayerTyping);
     socket.off('emoji:react', onEmojiReact);
     socket.off('sticker:show', onStickerShow);
+    cleanAllFloatingStickerBubbles();
     socket.off('room:error', onRoomError);
     socket.off('voice:request', onVoiceRequest);
     socket.off('voice:accept', onVoiceAccept);
